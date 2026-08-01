@@ -31,6 +31,7 @@ from .reconciler import Reconciler
 from .store import Store
 from .tenant_page import render as render_tenant
 from .tenant_page import render_login
+from .ui.routes import build_router as build_ui_router
 
 log = logging.getLogger(__name__)
 
@@ -223,73 +224,14 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     async def me(user: User = Depends(current_user)) -> dict[str, Any]:
         return user.to_dict()
 
-    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    async def index() -> str:
-        """Orientation page.
-
-        This is the gateway, not the building UI -- there is no operator interface
-        yet. Landing on a bare 404 gives no clue what is running or where to look,
-        so point at the interactive docs and the endpoints that exist.
-        """
-        def cell(value: Any, suffix: str = "", places: int = 1) -> str:
-            if value is None:
-                return "—"
-            if isinstance(value, (int, float)):
-                return f"{value:.{places}f}{suffix}"
-            return str(value)
-
-        rows = "".join(
-            "<tr>"
-            f"<td>{d.name}</td><td>{d.device_id}</td><td>{d.address}</td>"
-            f"<td class='{'ok' if d.online else 'bad'}'>{'online' if d.online else 'OFFLINE'}</td>"
-            f"<td>{cell(d.age_seconds(), 's ago', 0)}</td>"
-            f"<td>{cell(d.values.get('space_temp'), ' °F')}</td>"
-            f"<td>{cell(d.values.get('effective_heat_sp'), '', 0)}"
-            f" / {cell(d.values.get('effective_cool_sp'), '', 0)}</td>"
-            "</tr>"
-            for d in cache.all()
-        )
-        return f"""<!doctype html>
-<meta charset="utf-8"><title>BMS Gateway</title>
-<style>
- body{{font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;margin:2rem auto;max-width:52rem;padding:0 1rem}}
- code{{background:#8881;padding:.1em .35em;border-radius:3px}}
- table{{border-collapse:collapse;width:100%;margin:1rem 0}}
- th,td{{text-align:left;padding:.4rem .6rem;border-bottom:1px solid #8883}}
- .ok{{color:#137333}} .bad{{color:#c5221f;font-weight:600}}
- a{{color:#1a73e8}}
- @media(prefers-color-scheme:dark){{body{{background:#111;color:#eee}} .ok{{color:#81c995}} .bad{{color:#f28b82}} a{{color:#8ab4f8}}}}
-</style>
-<h1>BMS Gateway</h1>
-<p>BACnet/IP gateway for {len(cfg.devices)} TC500A thermostat(s).
-   This is the machine interface — there is no operator UI yet.</p>
-<p><strong><a href="/docs">→ Interactive API docs (/docs)</a></strong></p>
-<table>
- <tr><th>Name</th><th>Device</th><th>Address</th><th>State</th><th>Polled</th>
-     <th>Space temp</th><th>Eff. heat/cool</th></tr>
- {rows}
-</table>
-<h3>Endpoints</h3>
-<ul>
- <li><code>GET /devices</code> — live state of every thermostat</li>
- <li><code>GET /devices/{{id}}/schedule</code> — weekly schedule</li>
- <li><code>POST /devices/{{id}}/override</code> — force occupancy</li>
- <li><code>POST /devices/{{id}}/bypass</code> — timed occupancy bypass</li>
- <li><code>GET /holidays</code> — holiday rules</li>
- <li><code>POST /reconcile</code> — push intent to devices now</li>
- <li><code>GET /audit</code> — change log</li>
- <li><code>GET /health</code> — poll status</li>
-</ul>
-"""
-
     @app.get("/t/{device_id}", include_in_schema=False)
     async def tenant(request: Request, device_id: int):
         """Mobile bypass page — the one screen a tenant ever needs.
 
-        Deliberately a separate, tiny page rather than a route in an operator UI:
-        the audience, the device and the interaction are all different. Sends an
-        unauthenticated visitor to the login form rather than a bare 401, because
-        this is a page a person opens from a bookmark, not an API call.
+        Deliberately separate from the operator UI: different audience, different
+        device, different interaction. Sends an unauthenticated visitor to the
+        login form rather than a bare 401, because this is a page a person opens
+        from a bookmark, not an API call.
         """
         token = request.cookies.get(COOKIE_NAME)
         user = auth.resolve_session(token) if token else None
@@ -699,5 +641,10 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         if not auth.deactivate(username, actor=user.username):
             raise HTTPException(404, f"no user {username}")
         return {"username": username, "active": False}
+
+    # Mounted last so it can close over require_device and the running services.
+    app.include_router(
+        build_ui_router(cfg, cache, store, auth, reconciler, client, require_device)
+    )
 
     return app
