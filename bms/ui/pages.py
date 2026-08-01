@@ -173,7 +173,11 @@ device immediately; the schedule still decides which pair is in effect.</p></div
     if v.get("bypass_active") and isinstance(v.get("bypass_remaining_minutes"), (int, float)):
         mins = int(v["bypass_remaining_minutes"])
         h, m = divmod(mins, 60)
-        bypass_state = f'<p>{chip(f"running · {h}h {m:02d}m left" if h else f"running · {m}m left", "warn")}</p>'
+        # "about", not "left": no_BypassRemTime reports the configured period and
+        # was not observed decrementing, so a countdown would be a claim the
+        # device does not support.
+        period = f"{h}h {m:02d}m" if h else f"{m} min"
+        bypass_state = f'<p>{chip(f"running · about {period}", "warn")}</p>'
 
     bypass_buttons = "".join(
         f"""<button onclick="act('POST','/devices/{did}/bypass',{{minutes:{m}}},'Bypass {label} started')">{label}</button>"""

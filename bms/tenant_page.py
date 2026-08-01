@@ -168,8 +168,10 @@ async function send(minutes) {{
     msg.textContent = minutes
       ? 'On its way. The office will be comfortable shortly.'
       : 'Stopped. Back to the normal schedule.';
-    // The device is polled, so give it a cycle before showing the new state.
-    setTimeout(() => location.reload(), 2500);
+    // The server settles and re-reads the thermostat before replying, so by the
+    // time this runs the state above is already current -- no need to wait out a
+    // poll cycle as well.
+    setTimeout(() => location.reload(), 400);
   }} catch (err) {{
     // Never claim failure outright: a write can be applied even when the
     // acknowledgement does not come back.

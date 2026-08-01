@@ -11,6 +11,7 @@ layer in front of it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -123,6 +124,28 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             if d.device_id == device_id:
                 return d
         raise HTTPException(404, f"no device {device_id} in inventory")
+
+    # Measured on firmware 01.01.16.00: no_BypassState follows a bypass write
+    # somewhere between 0.8s and 1.9s, and clears within 1s.
+    SETTLE_SECONDS = 2.0
+
+    async def settle_and_refresh(device) -> None:
+        """Re-read a device after commanding it, before answering the caller.
+
+        Commands are written to `ni_*` points but the UI shows the `no_*`
+        read-backs, which only the poll loop updates. Without this the page
+        reloads against a cache entry up to a poll interval old, so the new state
+        appears or not depending on where in the cycle the button was pressed.
+
+        Refreshing from the wire rather than writing the expected value into the
+        cache keeps the display honest: if the device did not take the command,
+        the page says so instead of showing what we hoped for.
+        """
+        await asyncio.sleep(SETTLE_SECONDS)
+        try:
+            cache.record_success(device.device_id, await client.read_points(device))
+        except DeviceUnreachable:
+            pass  # the next scheduled poll will catch up
 
     # --- authentication ---------------------------------------------------------
 
@@ -375,6 +398,7 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
         cache.apply_local_write(device_id, "occupancy_override", int(state))
         cache.apply_local_write(device_id, "network_override_enable", 0 if releasing else 1)
+        await settle_and_refresh(device)
         return {"device_id": device_id, "override": state.name}
 
     @app.post("/devices/{device_id}/bypass")
@@ -410,7 +434,16 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
         cache.apply_local_write(device_id, "bypass_minutes", float(body.minutes))
         cache.apply_local_write(device_id, "bypass_enable", 1 if body.minutes > 0 else 0)
-        return {"device_id": device_id, "bypass_minutes": body.minutes}
+        await settle_and_refresh(device)
+
+        values = (cache.get(device_id).values if cache.get(device_id) else {})
+        return {
+            "device_id": device_id,
+            "bypass_minutes": body.minutes,
+            # Report what the device says, not what was asked for.
+            "active": bool(values.get("bypass_active")),
+            "remaining_minutes": values.get("bypass_remaining_minutes"),
+        }
 
     @app.get("/devices/{device_id}/schedule")
     async def schedule(device_id: int, user: User = Depends(current_user)) -> dict[str, Any]:
