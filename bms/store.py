@@ -135,6 +135,20 @@ CREATE TABLE IF NOT EXISTS app_user (
     last_login    REAL
 );
 
+-- Which zone a device belongs to.
+--
+-- The config file owns what is physically true about a device -- its BACnet id,
+-- address, MAC. Zone is organisational: it changes when a tenant moves offices,
+-- which is an operational act a building manager should be able to perform from
+-- the UI, not a YAML edit and a service restart. So config supplies the initial
+-- zone and this table overrides it from then on.
+CREATE TABLE IF NOT EXISTS device_zone (
+    device_id  INTEGER PRIMARY KEY,
+    zone       TEXT    NOT NULL,
+    updated_at REAL    NOT NULL,
+    updated_by TEXT    NOT NULL DEFAULT 'system'
+);
+
 -- Which zones a tenant may act on. Managers and admins ignore this table.
 CREATE TABLE IF NOT EXISTS user_zone (
     user_id INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
@@ -183,6 +197,10 @@ class Holiday:
     end_day: int | None = None
     week_of_month: int | None = None
     day_of_week: int | None = None
+    # 'global' | 'zone' | 'device'. Matches occupancy_exception, so both kinds of
+    # scheduling override are scoped with one vocabulary.
+    scope: str = "global"
+    scope_ref: str = "*"
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items()}
@@ -198,7 +216,34 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Bring an existing database up to the current shape.
+
+        `CREATE TABLE IF NOT EXISTS` silently leaves older tables alone, so
+        columns added after a database exists have to be applied explicitly.
+        """
+        columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(holiday)")}
+
+        # Holidays originally carried a bare `zone`. Exceptions already used
+        # scope/scope_ref, which also expresses "this one device" -- worth having
+        # both work the same way rather than two vocabularies for one idea.
+        if "scope" not in columns:
+            self._conn.execute(
+                "ALTER TABLE holiday ADD COLUMN scope TEXT NOT NULL DEFAULT 'global'"
+            )
+            self._conn.execute(
+                "ALTER TABLE holiday ADD COLUMN scope_ref TEXT NOT NULL DEFAULT '*'"
+            )
+            # Carry existing rows across: anything that named a zone becomes
+            # zone-scoped, and '*' stays global.
+            self._conn.execute(
+                "UPDATE holiday SET scope = 'zone', scope_ref = zone"
+                " WHERE zone IS NOT NULL AND zone != '*'"
+            )
+            self.log("migration", "holiday.scope_columns_added")
 
     def close(self) -> None:
         self._conn.close()
@@ -244,11 +289,16 @@ class Store:
         cols = (
             "name", "rule_type", "year", "month", "day", "end_month", "end_day",
             "week_of_month", "day_of_week", "state", "zone", "enabled",
+            "scope", "scope_ref",
         )
         values = {c: fields.get(c) for c in cols}
         values["state"] = fields.get("state", 1)
-        values["zone"] = fields.get("zone", "*")
         values["enabled"] = int(fields.get("enabled", True))
+        values["scope"] = fields.get("scope", "global")
+        values["scope_ref"] = fields.get("scope_ref", "*")
+        # The legacy `zone` column is kept in step with scope so the two can never
+        # disagree while anything still reads it.
+        values["zone"] = values["scope_ref"] if values["scope"] == "zone" else "*"
 
         cur = self._conn.execute(
             f"INSERT INTO holiday ({', '.join(cols)}, created_at, created_by)"
@@ -267,15 +317,31 @@ class Store:
             self.log(actor, "holiday.delete", str(holiday_id))
         return bool(cur.rowcount)
 
-    def holidays(self, zone: str | None = None, enabled_only: bool = True) -> list[Holiday]:
+    def holidays(
+        self,
+        device_id: int | None = None,
+        zone: str | None = None,
+        enabled_only: bool = True,
+    ) -> list[Holiday]:
+        """Holiday rules, optionally narrowed to those applying to one device.
+
+        Pass both `device_id` and its resolved `zone` to get everything that
+        applies to it: global rules, rules for its zone, and rules naming it
+        specifically.
+        """
         sql = "SELECT * FROM holiday"
         clauses, params = [], []
         if enabled_only:
             clauses.append("enabled = 1")
-        if zone is not None:
-            # '*' applies everywhere, so a zone query must include it.
-            clauses.append("(zone = ? OR zone = '*')")
-            params.append(zone)
+        if device_id is not None or zone is not None:
+            scoped = ["scope = 'global'"]
+            if zone is not None:
+                scoped.append("(scope = 'zone' AND scope_ref = ?)")
+                params.append(zone)
+            if device_id is not None:
+                scoped.append("(scope = 'device' AND scope_ref = ?)")
+                params.append(str(device_id))
+            clauses.append("(" + " OR ".join(scoped) + ")")
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY month, day, id"
@@ -287,9 +353,36 @@ class Store:
                 month=r["month"], day=r["day"], end_month=r["end_month"],
                 end_day=r["end_day"], week_of_month=r["week_of_month"],
                 day_of_week=r["day_of_week"],
+                scope=r["scope"], scope_ref=r["scope_ref"],
             )
             for r in self._conn.execute(sql, params).fetchall()
         ]
+
+    # --- device zone ------------------------------------------------------------
+
+    def device_zone(self, device_id: int) -> str | None:
+        """The DB override, or None to fall back to the configured zone."""
+        r = self._conn.execute(
+            "SELECT zone FROM device_zone WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        return r["zone"] if r else None
+
+    def device_zones(self) -> dict[int, str]:
+        return {
+            r["device_id"]: r["zone"]
+            for r in self._conn.execute("SELECT device_id, zone FROM device_zone")
+        }
+
+    def set_device_zone(self, device_id: int, zone: str, actor: str = "system") -> None:
+        self._conn.execute(
+            "INSERT INTO device_zone (device_id, zone, updated_at, updated_by)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT (device_id) DO UPDATE SET zone = excluded.zone,"
+            " updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            (device_id, zone, time.time(), actor),
+        )
+        self._conn.commit()
+        self.log(actor, "device.set_zone", str(device_id), {"zone": zone})
 
     # --- setpoint intent --------------------------------------------------------
 

@@ -28,6 +28,7 @@ def build_router(
     auth,
     reconciler,
     client,
+    zones,
     require_device: Callable[[int, Any], Any],
 ) -> APIRouter:
     router = APIRouter(include_in_schema=False)
@@ -90,6 +91,7 @@ def build_router(
             pages.device_detail(
                 user, state.to_dict(cfg.poll_interval_seconds * 3),
                 groups, group_id, overrides, weekly,
+                known_zones=zones.known() if user.at_least("manager") else None,
             )
         )
 
@@ -123,7 +125,11 @@ def build_router(
             for h in store.holidays(enabled_only=False)
         ]
         return HTMLResponse(
-            pages.holidays(user, rules, store.all_exceptions(upcoming_only=True), year)
+            pages.holidays(
+                user, rules, store.all_exceptions(upcoming_only=True), year,
+                known_zones=zones.known(),
+                devices=[{"device_id": d.device_id, "name": d.name} for d in cfg.devices],
+            )
         )
 
     @router.get("/ui/system", response_class=HTMLResponse)
@@ -153,7 +159,6 @@ def build_router(
         if not user.at_least("admin"):
             return RedirectResponse("/", status_code=303)
 
-        zones = sorted({d.zone for d in cfg.devices})
-        return HTMLResponse(pages.users(user, auth.users(), zones))
+        return HTMLResponse(pages.users(user, auth.users(), zones.known()))
 
     return router

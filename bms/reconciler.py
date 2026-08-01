@@ -32,6 +32,7 @@ from .schedules import (
     week_to_bacnet,
 )
 from .store import Store
+from .zones import Zones
 
 log = logging.getLogger(__name__)
 
@@ -66,8 +67,10 @@ class DeviceResult:
 
 
 class Reconciler:
-    def __init__(self, cfg: Config, client: BacnetClient, store: Store) -> None:
+    def __init__(self, cfg: Config, client: BacnetClient, store: Store,
+                 zones: Zones) -> None:
         self._cfg = cfg
+        self._zones = zones
         self._client = client
         self._store = store
         self._task: asyncio.Task | None = None
@@ -224,7 +227,8 @@ class Reconciler:
     async def _reconcile_holidays(
         self, device: DeviceConfig, result: DeviceResult, actor: str
     ) -> None:
-        holidays = self._store.holidays(zone=device.zone)
+        zone = self._zones.of(device)
+        holidays = self._store.holidays(device_id=device.device_id, zone=zone)
         try:
             desired = to_calendar_entries(holidays)
         except ValueError as err:
@@ -279,7 +283,7 @@ class Reconciler:
         # Only current and future one-offs; expired ones would waste slots on the
         # device while changing nothing.
         today = dt.date.today().isoformat()
-        for exception in self._store.exceptions_for(device.device_id, device.zone, on_or_after=today):
+        for exception in self._store.exceptions_for(device.device_id, self._zones.of(device), on_or_after=today):
             try:
                 events.append(exception_to_bacnet(exception))
             except ValueError as err:
@@ -294,7 +298,7 @@ class Reconciler:
     async def _reconcile_setpoints(
         self, device: DeviceConfig, result: DeviceResult, actor: str
     ) -> None:
-        intended = self._store.setpoints_for(device.device_id, device.zone)
+        intended = self._store.setpoints_for(device.device_id, self._zones.of(device))
         if not intended:
             return
 

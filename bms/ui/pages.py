@@ -135,6 +135,7 @@ setTimeout(() => location.reload(), 15000);
 def device_detail(
     user, device: dict, groups: list[dict], group_id: int | None,
     overrides: dict[int, list[dict]], weekly: dict[str, list[dict]] | None,
+    known_zones: list[str] | None = None,
 ) -> str:
     v = device.get("values", {})
     is_manager = user.at_least("manager")
@@ -245,9 +246,37 @@ device immediately; the schedule still decides which pair is in effect.</p></div
  {assign}
 </div>"""
 
+    # Moving a device between zones is how a tenant relocation is recorded: it
+    # changes which tenants can reach it and which zone-scoped holidays apply.
+    zone_block = ""
+    if is_manager:
+        opts = "".join(
+            f'<option value="{e(z)}"{" selected" if z == device["zone"] else ""}>{e(z)}</option>'
+            for z in (known_zones or [])
+        )
+        zone_block = f"""
+<h2>Zone</h2>
+<div class="card">
+ <p class="sub">Which tenants can reach this thermostat, and which zone-scoped
+    holidays apply to it. Change this when a tenant moves office.</p>
+ <div class="row">
+  <div><label for="zsel">Existing zone</label><select id="zsel">{opts}</select></div>
+  <div><label for="znew">or a new one</label><input id="znew" placeholder="suite-410"></div>
+  <button onclick="saveZone({did})">Move</button>
+ </div>
+</div>
+<script>
+function saveZone(id){{
+  const typed = document.getElementById('znew').value.trim();
+  const zone = typed || document.getElementById('zsel').value;
+  if (!zone) {{ toast('Pick or type a zone', false); return; }}
+  act('PUT', '/devices/' + id + '/zone', {{zone}}, 'Moved to ' + zone);
+}}
+</script>"""
+
     body = f"""
 <h1>{e(device['name'])}</h1>
-<p class="lede">Device {did} · {e(device['zone'])} · {e(device['address'])} {_status_chip(device)}</p>
+<p class="lede">Device {did} · {chip(device['zone'])} · {e(device['address'])} {_status_chip(device)}</p>
 
 <div class="grid two">
  <div class="card">
@@ -282,6 +311,7 @@ device immediately; the schedule still decides which pair is in effect.</p></div
 {override_block}
 {setpoint_rows}
 {schedule_block}
+{zone_block}
 <p style="margin-top:2rem"><a href="/">← All devices</a></p>
 """
     return page(device["name"], user, body, active="/")
@@ -370,7 +400,9 @@ async function saveDay(groupId, day){{
 # --- holidays and exceptions -------------------------------------------------
 
 
-def holidays(user, rules: list[dict], exceptions: list[dict], year: int) -> str:
+def holidays(user, rules: list[dict], exceptions: list[dict], year: int,
+             known_zones: list[str] | None = None,
+             devices: list[dict] | None = None) -> str:
     rows = []
     for h in rules:
         dates = h.get("dates") or []
@@ -383,7 +415,8 @@ def holidays(user, rules: list[dict], exceptions: list[dict], year: int) -> str:
  <td>{chip(h['rule_type'])}</td>
  <td>{when}</td>
  <td>{e(SCHED_LABEL.get(h['state'], h['state']))}</td>
- <td>{e(h['zone'])}</td>
+ <td>{chip('everywhere') if h.get('scope','global')=='global'
+      else chip(h['scope'] + ': ' + h['scope_ref'])}</td>
  <td><button class="danger" onclick="act('DELETE','/holidays/{h['id']}',null,'Removed')">Remove</button></td>
 </tr>"""
         )
@@ -400,6 +433,11 @@ def holidays(user, rules: list[dict], exceptions: list[dict], year: int) -> str:
  <td>{e(x['scope'])}:{e(x['scope_ref'])}</td>
  <td><button class="danger" onclick="act('DELETE','/exceptions/{x['id']}',null,'Removed')">Remove</button></td></tr>"""
         )
+
+    zone_opts = "".join(f'<option value="{e(z)}">{e(z)}</option>' for z in (known_zones or []))
+    device_opts = "".join(
+        f'<option value="{d["device_id"]}">{e(d["name"])}</option>' for d in (devices or [])
+    )
 
     body = f"""
 <h1>Holidays</h1>
@@ -428,6 +466,16 @@ the thermostat itself, so they never need re-entering — dates shown are for {y
    </select></div>
   <div><label for="hstate">State</label>
    <select id="hstate"><option value="1">Unoccupied</option><option value="3">Standby</option></select></div>
+  <div><label for="hscope">Applies to</label>
+   <select id="hscope" onchange="showScope()">
+    <option value="global">The whole building</option>
+    <option value="zone">One zone</option>
+    <option value="device">One thermostat</option>
+   </select></div>
+  <div id="sc-zone" style="display:none"><label for="hzone">Zone</label>
+   <select id="hzone">{zone_opts}</select></div>
+  <div id="sc-dev" style="display:none"><label for="hdev">Thermostat</label>
+   <select id="hdev">{device_opts}</select></div>
  </div>
  <div class="row" id="f-fixed" style="margin-top:.75rem">
   <div><label for="hmonth">Month</label><input id="hmonth" type="number" min="1" max="12" value="12"></div>
@@ -477,10 +525,19 @@ function showFields(){{
   document.getElementById('f-range').style.display = t === 'range' ? 'flex' : 'none';
 }}
 const val = id => +document.getElementById(id).value;
+function showScope(){{
+  const sc = document.getElementById('hscope').value;
+  document.getElementById('sc-zone').style.display = sc === 'zone' ? 'block' : 'none';
+  document.getElementById('sc-dev').style.display  = sc === 'device' ? 'block' : 'none';
+}}
 function addHoliday(){{
   const type = document.getElementById('htype').value;
+  const scope = document.getElementById('hscope').value;
   const body = {{name: document.getElementById('hname').value.trim(),
-                rule_type: type, state: val('hstate')}};
+                rule_type: type, state: val('hstate'), scope,
+                scope_ref: scope === 'zone' ? document.getElementById('hzone').value
+                         : scope === 'device' ? document.getElementById('hdev').value
+                         : '*'}};
   if (!body.name) {{ toast('Give it a name', false); return; }}
   if (type === 'fixed')    {{ body.month = val('hmonth'); body.day = val('hday'); }}
   if (type === 'floating') {{ body.month = val('fmonth');
@@ -570,11 +627,26 @@ devices responding · polling every {e(health.get('poll_interval_seconds'))}s
 
 
 def users(user, accounts: list[dict], zones: list[str]) -> str:
+    def zone_editor(a: dict) -> str:
+        """Tenants are scoped by zone, so this is what changes when they relocate.
+
+        Free text rather than a picker: a tenant may hold several zones, and
+        typing "floor-3, suite-410" is quicker than a multi-select on a phone.
+        """
+        if a["role"] != "tenant":
+            return '<span class="sub">all zones</span>'
+        return (
+            f'<div class="row" style="gap:.35rem">'
+            f'<input id="z-{e(a["username"])}" value="{e(", ".join(a["zones"]))}"'
+            f' placeholder="floor-3, suite-410" style="width:12rem">'
+            f'<button onclick="saveZones(\'{e(a["username"])}\')">Save</button></div>'
+        )
+
     rows = "".join(
         f"""<tr>
  <td>{e(a['display_name'] or a['username'])}<div class="sub">{e(a['username'])}</div></td>
  <td>{chip(a['role'], 'ok' if a['active'] else 'bad')}</td>
- <td>{e(', '.join(a['zones']) or '—')}</td>
+ <td>{zone_editor(a)}</td>
  <td class="sub">{e(dt.datetime.fromtimestamp(a['last_login']).strftime('%d %b %H:%M')
                     if a.get('last_login') else 'never')}</td>
  <td>{'' if a['username'] == user.username or not a['active'] else
@@ -612,6 +684,12 @@ own suite. Managers run the building; admins also manage accounts.</p>
 </div>
 
 <script>
+function saveZones(username){{
+  const raw = document.getElementById('z-' + username).value;
+  const zones = raw.split(',').map(z => z.trim()).filter(Boolean);
+  act('PUT', '/users/' + encodeURIComponent(username) + '/zones', {{zones}},
+      zones.length ? 'Zones updated' : 'All zones removed');
+}}
 function addUser(){{
   const zone = document.getElementById('uzone').value;
   const body = {{

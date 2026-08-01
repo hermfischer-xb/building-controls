@@ -30,6 +30,7 @@ from .poller import Poller
 from .schedules import DAYS, DEFAULT_GROUPS, resolve_week, validate_transitions, week_summary
 from .reconciler import Reconciler
 from .store import Store
+from .zones import Zones
 from .tenant_page import render as render_tenant
 from .tenant_page import render_login
 from .ui.routes import build_router as build_ui_router
@@ -81,6 +82,10 @@ class ZonesRequest(BaseModel):
     zones: list[str]
 
 
+class ZoneRequest(BaseModel):
+    zone: str = Field(min_length=1, description="zone name; free text, picked from existing")
+
+
 class HolidayRequest(BaseModel):
     name: str
     rule_type: str = Field(description="fixed | range | floating")
@@ -92,15 +97,18 @@ class HolidayRequest(BaseModel):
     week_of_month: int | None = Field(default=None, ge=1, le=5, description="5 means last")
     day_of_week: int | None = Field(default=None, ge=1, le=7, description="1=Mon..7=Sun")
     state: int = Field(default=1, description="0=Occupied, 1=Unoccupied, 3=Standby")
-    zone: str = Field(default="*", description="'*' applies to every zone")
+    scope: str = Field(default="global", description="global | zone | device")
+    scope_ref: str = Field(default="*", description="zone name, or device id, for the above")
 
 
 def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     client = BacnetClient(cfg.bacnet, cfg.request_timeout_seconds)
     cache = Cache(stale_after=cfg.poll_interval_seconds * 3)
-    poller = Poller(cfg, client, cache)
     store = Store(db_path)
-    reconciler = Reconciler(cfg, client, store)
+    # Zones reads the store, so both must exist before anything that resolves one.
+    zones = Zones(cfg.devices, store)
+    poller = Poller(cfg, client, cache, zones)
+    reconciler = Reconciler(cfg, client, store, zones)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -169,7 +177,7 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     def require_device(device_id: int, user: User) -> Any:
         """Resolve a device and confirm this user is allowed to touch it."""
         device = _device(device_id)
-        if not user.may_access_zone(device.zone):
+        if not user.may_access_zone(zones.of(device)):
             # 404 rather than 403: a tenant has no business learning which other
             # device ids exist.
             raise HTTPException(404, f"no device {device_id} in inventory")
@@ -560,6 +568,41 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
                     user: User = Depends(require("manager"))) -> list[dict[str, Any]]:
         return store.recent_audit(limit)
 
+    # --- zones ------------------------------------------------------------------
+
+    @app.get("/zones")
+    async def list_zones(user: User = Depends(current_user)) -> dict[str, Any]:
+        return {
+            "zones": zones.known(),
+            "devices": {
+                str(d.device_id): {"name": d.name, "zone": zones.of(d)}
+                for d in cfg.devices
+                if user.may_access_zone(zones.of(d))
+            },
+        }
+
+    @app.put("/devices/{device_id}/zone")
+    async def set_device_zone(
+        device_id: int, body: ZoneRequest, user: User = Depends(require("manager"))
+    ) -> dict[str, Any]:
+        """Move a device to another zone -- what happens when a tenant relocates.
+
+        Stored in the database rather than the config file so it takes effect
+        immediately, without an edit and a restart.
+        """
+        device = _device(device_id)
+        try:
+            zones.set(device_id, body.zone, actor=user.username)
+        except ValueError as err:
+            raise HTTPException(400, str(err)) from err
+
+        # The cache carries the zone for display and for tenant filtering, so it
+        # has to move too or the change is invisible until the next restart.
+        state = cache.get(device_id)
+        if state is not None:
+            state.zone = body.zone
+        return {"device_id": device_id, "zone": body.zone, "reconcile_required": True}
+
     # --- schedule groups --------------------------------------------------------
 
     @app.get("/groups")
@@ -716,7 +759,7 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
     # Mounted last so it can close over require_device and the running services.
     app.include_router(
-        build_ui_router(cfg, cache, store, auth, reconciler, client, require_device)
+        build_ui_router(cfg, cache, store, auth, reconciler, client, zones, require_device)
     )
 
     return app

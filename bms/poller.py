@@ -16,21 +16,24 @@ import time
 from .bacnet import BacnetClient, DeviceUnreachable
 from .cache import Cache
 from .config import Config
+from .zones import Zones
 
 log = logging.getLogger(__name__)
 
 
 class Poller:
-    def __init__(self, cfg: Config, client: BacnetClient, cache: Cache) -> None:
+    def __init__(self, cfg: Config, client: BacnetClient, cache: Cache,
+                 zones: Zones) -> None:
         self._cfg = cfg
         self._client = client
         self._cache = cache
+        self._zones = zones
         self._task: asyncio.Task | None = None
         self._cycle = 0
 
     async def start(self) -> None:
         for d in self._cfg.devices:
-            self._cache.register(d.device_id, d.name, d.zone, d.address)
+            self._cache.register(d.device_id, d.name, self._zones.of(d), d.address)
         await self._verify_inventory()
         self._task = asyncio.create_task(self._run(), name="poller")
 
