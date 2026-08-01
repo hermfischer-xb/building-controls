@@ -121,6 +121,7 @@ async function act(method, path, body, okMsg, reload){
 
 NAV = (
     ("/", "Dashboard", "tenant"),
+    ("/ui/zones", "Zones", "manager"),
     ("/ui/schedules", "Schedules", "manager"),
     ("/ui/holidays", "Holidays", "manager"),
     ("/ui/system", "System", "manager"),

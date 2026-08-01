@@ -16,6 +16,7 @@ sees the commissioned value and misses every move since.
 
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 from .config import DeviceConfig
@@ -37,11 +38,43 @@ class Zones:
             return device.zone
         return self._defaults.get(device_id, "default")
 
+    # Letters, digits, spaces, hyphens and underscores. Deliberately narrow:
+    # zone names are typed into pickers and compared as strings, so punctuation
+    # and stray whitespace only create names that look identical and are not.
+    _VALID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$")
+
     def set(self, device_id: int, zone: str, actor: str = "system") -> None:
         zone = zone.strip()
         if not zone:
             raise ValueError("zone cannot be empty")
+        if not self._VALID.match(zone):
+            raise ValueError(
+                "zone may contain letters, numbers, spaces, hyphens and underscores, "
+                "and must start with a letter or number"
+            )
         self._store.set_device_zone(device_id, zone, actor=actor)
+
+    def validate_grant(self, requested: Iterable[str]) -> list[str]:
+        """Check zones being granted to a tenant, rejecting ones that do not exist.
+
+        A grant for a zone with no devices is not an error to warn about later --
+        it silently gives the tenant access to nothing, and the first anyone hears
+        of it is a complaint that the app shows an empty dashboard. Better to
+        refuse the typo at the point it is made.
+        """
+        known = set(self.known())
+        cleaned, unknown = [], []
+        for zone in requested:
+            zone = zone.strip()
+            if not zone:
+                continue
+            (cleaned if zone in known else unknown).append(zone)
+        if unknown:
+            raise ValueError(
+                f"unknown zone(s): {', '.join(sorted(unknown))}. "
+                f"Existing zones are: {', '.join(sorted(known)) or '(none yet)'}"
+            )
+        return sorted(set(cleaned))
 
     def known(self) -> list[str]:
         """Every zone in use, for populating pickers.

@@ -718,9 +718,10 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         body: UserRequest, user: User = Depends(require("admin"))
     ) -> dict[str, Any]:
         try:
+            granted = zones.validate_grant(body.zones) if body.role == "tenant" else []
             auth.create_user(
                 body.username, body.password, body.role, body.display_name,
-                body.zones, actor=user.username,
+                granted, actor=user.username,
             )
         except ValueError as err:
             raise HTTPException(400, str(err)) from err
@@ -743,9 +744,13 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     async def set_zones(
         username: str, body: ZonesRequest, user: User = Depends(require("admin"))
     ) -> dict[str, Any]:
-        if not auth.set_zones(username, body.zones, actor=user.username):
+        try:
+            cleaned = zones.validate_grant(body.zones)
+        except ValueError as err:
+            raise HTTPException(400, str(err)) from err
+        if not auth.set_zones(username, cleaned, actor=user.username):
             raise HTTPException(404, f"no user {username}")
-        return {"username": username, "zones": body.zones}
+        return {"username": username, "zones": cleaned}
 
     @app.delete("/users/{username}")
     async def deactivate_user(

@@ -403,22 +403,52 @@ async function saveDay(groupId, day){{
 def holidays(user, rules: list[dict], exceptions: list[dict], year: int,
              known_zones: list[str] | None = None,
              devices: list[dict] | None = None) -> str:
+    zone_opts = "".join(f'<option value="{e(z)}">{e(z)}</option>' for z in (known_zones or []))
+    device_opts = "".join(
+        f'<option value="{d["device_id"]}">{e(d["name"])}</option>' for d in (devices or [])
+    )
+
     rows = []
     for h in rules:
         dates = h.get("dates") or []
         when = e(dates[0]) if len(dates) == 1 else (
             f"{e(dates[0])} … {e(dates[-1])}" if dates else '<span class="sub">—</span>'
         )
+        scope_chip = (
+            chip("everywhere") if h.get("scope", "global") == "global"
+            else chip(f"{h['scope']}: {h['scope_ref']}")
+        )
+        # The dates this rule resolves to, so "working through it" can target the
+        # right day without the manager working out when a floating holiday falls.
+        date_opts = "".join(f'<option value="{e(d)}">{e(d)}</option>' for d in dates)
+        hid = h["id"]
+
         rows.append(
             f"""<tr>
  <td>{e(h['name'])}</td>
  <td>{chip(h['rule_type'])}</td>
  <td>{when}</td>
  <td>{e(SCHED_LABEL.get(h['state'], h['state']))}</td>
- <td>{chip('everywhere') if h.get('scope','global')=='global'
-      else chip(h['scope'] + ': ' + h['scope_ref'])}</td>
- <td><button class="danger" onclick="act('DELETE','/holidays/{h['id']}',null,'Removed')">Remove</button></td>
-</tr>"""
+ <td>{scope_chip}</td>
+ <td><div class="row" style="gap:.35rem">
+   <button onclick="toggleWork({hid})" title="A tenant is working this day">Working…</button>
+   <button class="danger" onclick="act('DELETE','/holidays/{hid}',null,'Removed')">Remove</button>
+ </div></td>
+</tr>
+<tr id="wt{hid}" style="display:none"><td colspan="6">
+ <div class="card" style="margin:.35rem 0">
+  <p class="sub"><strong>{e(h['name'])}</strong> — a tenant is working this day.
+     Creates a dated exception for their zone, which the thermostat applies
+     <em>over</em> the holiday. The holiday itself is left alone for everyone else.</p>
+  <div class="row">
+   <div><label>Zone</label><select id="wtz{hid}">{zone_opts}</select></div>
+   <div><label>Date</label><select id="wtd{hid}">{date_opts}</select></div>
+   <div><label>Occupied from</label><input id="wtf{hid}" type="time" value="08:00"></div>
+   <div><label>until</label><input id="wtu{hid}" type="time" value="17:00"></div>
+   <button class="primary" onclick="saveWork({hid},'{e(h['name'])}')">Save</button>
+  </div>
+ </div>
+</td></tr>"""
         )
 
     ex_rows = []
@@ -433,11 +463,6 @@ def holidays(user, rules: list[dict], exceptions: list[dict], year: int,
  <td>{e(x['scope'])}:{e(x['scope_ref'])}</td>
  <td><button class="danger" onclick="act('DELETE','/exceptions/{x['id']}',null,'Removed')">Remove</button></td></tr>"""
         )
-
-    zone_opts = "".join(f'<option value="{e(z)}">{e(z)}</option>' for z in (known_zones or []))
-    device_opts = "".join(
-        f'<option value="{d["device_id"]}">{e(d["name"])}</option>' for d in (devices or [])
-    )
 
     body = f"""
 <h1>Holidays</h1>
@@ -525,6 +550,22 @@ function showFields(){{
   document.getElementById('f-range').style.display = t === 'range' ? 'flex' : 'none';
 }}
 const val = id => +document.getElementById(id).value;
+function toggleWork(id){{
+  const row = document.getElementById('wt' + id);
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}}
+function saveWork(id, name){{
+  const zone = document.getElementById('wtz' + id).value;
+  const date = document.getElementById('wtd' + id).value;
+  if (!zone || !date) {{ toast('Pick a zone and a date', false); return; }}
+  act('POST', '/exceptions', {{
+    name: name + ' — ' + zone + ' working',
+    start_date: date,
+    transitions: [{{time: document.getElementById('wtf' + id).value, state: 0}},
+                  {{time: document.getElementById('wtu' + id).value, state: 1}}],
+    scope: 'zone', scope_ref: zone
+  }}, 'Recorded — reconcile to apply');
+}}
 function showScope(){{
   const sc = document.getElementById('hscope').value;
   document.getElementById('sc-zone').style.display = sc === 'zone' ? 'block' : 'none';
@@ -628,18 +669,29 @@ devices responding · polling every {e(health.get('poll_interval_seconds'))}s
 
 def users(user, accounts: list[dict], zones: list[str]) -> str:
     def zone_editor(a: dict) -> str:
-        """Tenants are scoped by zone, so this is what changes when they relocate.
+        """Checkboxes of real zones rather than a text field.
 
-        Free text rather than a picker: a tenant may hold several zones, and
-        typing "floor-3, suite-410" is quicker than a multi-select on a phone.
+        Free text needed a legend and a parser, and still let someone type
+        "floor3" for "floor-3" -- a typo that silently grants access to nothing
+        and is invisible until the tenant complains. Offering only zones that
+        exist removes the failure mode instead of validating it after the fact.
         """
         if a["role"] != "tenant":
-            return '<span class="sub">all zones</span>'
+            return '<span class="sub">all zones — role is not zone-scoped</span>'
+        if not zones:
+            return '<span class="sub">no zones defined yet</span>'
+        held = set(a["zones"])
+        boxes = "".join(
+            f'<label style="display:inline-flex;align-items:center;gap:.3rem;'
+            f'margin:0 .7rem .3rem 0;color:inherit">'
+            f'<input type="checkbox" name="z-{e(a["username"])}" value="{e(z)}"'
+            f'{" checked" if z in held else ""}> {e(z)}</label>'
+            for z in zones
+        )
         return (
-            f'<div class="row" style="gap:.35rem">'
-            f'<input id="z-{e(a["username"])}" value="{e(", ".join(a["zones"]))}"'
-            f' placeholder="floor-3, suite-410" style="width:12rem">'
-            f'<button onclick="saveZones(\'{e(a["username"])}\')">Save</button></div>'
+            f'<div>{boxes}</div>'
+            f'<button style="margin-top:.35rem" '
+            f'onclick="saveZones(\'{e(a["username"])}\')">Save zones</button>'
         )
 
     rows = "".join(
@@ -685,10 +737,10 @@ own suite. Managers run the building; admins also manage accounts.</p>
 
 <script>
 function saveZones(username){{
-  const raw = document.getElementById('z-' + username).value;
-  const zones = raw.split(',').map(z => z.trim()).filter(Boolean);
+  const zones = [...document.querySelectorAll(
+      'input[name="z-' + username + '"]:checked')].map(b => b.value);
   act('PUT', '/users/' + encodeURIComponent(username) + '/zones', {{zones}},
-      zones.length ? 'Zones updated' : 'All zones removed');
+      zones.length ? 'Zones updated' : 'All zones removed — tenant sees nothing');
 }}
 function addUser(){{
   const zone = document.getElementById('uzone').value;
@@ -707,3 +759,98 @@ function addUser(){{
 </script>
 """
     return page("Users", user, body, active="/ui/users")
+
+
+# --- zones -------------------------------------------------------------------
+
+
+def zones_page(user, mapping: list[dict], known: list[str], tenants: list[dict]) -> str:
+    """Device-to-zone mapping in one place.
+
+    Every device has exactly one zone by construction: the override table is keyed
+    on device id so it can hold at most one, and a device with no override falls
+    back to the zone it was commissioned into. There is no state where a device
+    has none or several, so this page never has to reconcile a conflict.
+    """
+    by_zone: dict[str, list[dict]] = {z: [] for z in known}
+    for d in mapping:
+        by_zone.setdefault(d["zone"], []).append(d)
+
+    tenants_by_zone: dict[str, list[str]] = {}
+    for t in tenants:
+        for z in t["zones"]:
+            tenants_by_zone.setdefault(z, []).append(t["display_name"] or t["username"])
+
+    cards = []
+    for zone in sorted(by_zone):
+        devices = by_zone[zone]
+        options = "".join(
+            f'<option value="{e(z)}"{" selected" if z == zone else ""}>{e(z)}</option>'
+            for z in known
+        )
+        rows = "".join(
+            f"""<tr>
+ <td><a href="/ui/devices/{d['device_id']}">{e(d['name'])}</a>
+     <div class="sub">device {d['device_id']} · {e(d['address'])}</div></td>
+ <td><select id="mv{d['device_id']}">{options}</select></td>
+ <td><button onclick="moveDevice({d['device_id']})">Move</button></td>
+</tr>"""
+            for d in sorted(devices, key=lambda x: x["name"])
+        )
+        who = tenants_by_zone.get(zone, [])
+        cards.append(
+            f"""<div class="card">
+ <h2 style="margin-top:0">{e(zone)} {chip(f"{len(devices)} device(s)")}</h2>
+ <p class="sub">Tenants with access: {e(', '.join(who)) if who else 'none'}</p>
+ {'<table>' + rows + '</table>' if rows
+  else '<p class="empty">No devices in this zone.</p>'}
+</div>"""
+        )
+
+    orphans = [z for z in known if not by_zone.get(z)]
+    note = (
+        f'<p class="sub">{len(orphans)} zone(s) with no devices: '
+        f'{e(", ".join(orphans))}. They stay listed so tenant grants survive a '
+        f'temporary move.</p>' if orphans else ""
+    )
+
+    body = f"""
+<h1>Zones</h1>
+<p class="lede">A zone groups thermostats for tenant access and for zone-scoped
+holidays. Moving a device here is how a tenant relocation is recorded — it takes
+effect immediately, for both access and scheduling.</p>
+
+<div class="card">
+ <div class="row">
+  <div><label for="newzone">Create a zone</label>
+   <input id="newzone" placeholder="suite-410"></div>
+  <div><label for="newzonedev">by moving this device into it</label>
+   <select id="newzonedev">
+    {''.join(f'<option value="{d["device_id"]}">{e(d["name"])}</option>' for d in mapping)}
+   </select></div>
+  <button class="primary" onclick="createZone()">Create</button>
+ </div>
+ <p class="sub">A zone exists because a device is in it, so creating one means
+    moving a device. Lower case with hyphens keeps them easy to type.</p>
+</div>
+
+{''.join(cards)}
+{note}
+
+<script>
+function moveDevice(id){{
+  const zone = document.getElementById('mv' + id).value;
+  act('PUT', '/devices/' + id + '/zone', {{zone}}, 'Moved to ' + zone);
+}}
+function createZone(){{
+  const zone = document.getElementById('newzone').value.trim();
+  const id = document.getElementById('newzonedev').value;
+  if (!zone) {{ toast('Name the zone first', false); return; }}
+  if (!/^[a-z0-9][a-z0-9 _-]*$/i.test(zone)) {{
+    toast('Use letters, numbers, spaces, hyphens or underscores', false); return;
+  }}
+  act('PUT', '/devices/' + id + '/zone', {{zone}}, 'Created ' + zone);
+}}
+</script>
+"""
+    return page("Zones", user, body, active="/ui/zones")

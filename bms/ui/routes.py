@@ -95,6 +95,22 @@ def build_router(
             )
         )
 
+    @router.get("/ui/zones", response_class=HTMLResponse)
+    async def zones_page(request: Request):
+        user = visitor(request)
+        if user is None:
+            return signin(request)
+        if not user.at_least("manager"):
+            return RedirectResponse("/", status_code=303)
+
+        mapping = [
+            {"device_id": d.device_id, "name": d.name, "address": d.address,
+             "zone": zones.of(d)}
+            for d in cfg.devices
+        ]
+        tenants = [u for u in auth.users() if u["role"] == "tenant" and u["active"]]
+        return HTMLResponse(pages.zones_page(user, mapping, zones.known(), tenants))
+
     @router.get("/ui/schedules", response_class=HTMLResponse)
     async def schedules(request: Request):
         user = visitor(request)
