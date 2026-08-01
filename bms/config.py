@@ -1,0 +1,94 @@
+"""Gateway configuration.
+
+The device inventory is config, not discovery. Who-Is is useful for commissioning
+but a production poll loop should know exactly what it expects to find, so a
+thermostat that drops off the network is an alarm rather than a silently shorter
+device list.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, Field, field_validator
+
+
+class DeviceConfig(BaseModel):
+    device_id: int = Field(description="BACnet device object instance, unique per unit")
+    address: str = Field(description="IP or IP:port of the thermostat")
+    name: str = Field(description="human label, e.g. 'Room 301'")
+    zone: str = Field(default="default", description="groups devices for tenant permissions")
+    mac: str | None = Field(
+        default=None,
+        description="Wi-Fi MAC, recorded so the DHCP reservation can be rebuilt from "
+        "this file rather than from the router's UI",
+    )
+
+    @field_validator("device_id")
+    @classmethod
+    def _sane_device_id(cls, v: int) -> int:
+        if not 0 <= v <= 4194303:
+            raise ValueError(f"device_id {v} outside BACnet range 0-4194303")
+        if v >= 4194302:
+            raise ValueError(
+                f"device_id {v} is the unconfigured default -- set a unique ID on the "
+                "thermostat under Config > Connection > BACnet IP"
+            )
+        return v
+
+
+class BacnetConfig(BaseModel):
+    # Always pin the interface. A host with two NICs on the same subnet will
+    # otherwise bind ambiguously and Who-Is can leave by the wrong one.
+    address: str = Field(description="local interface with prefix, e.g. 192.168.1.10/24")
+    device_id: int = Field(default=4000000, description="this gateway's own BACnet device id")
+    name: str = Field(default="bms-gateway")
+    foreign_bbmd: str | None = Field(
+        default=None, description="BBMD address if the gateway is not on the thermostats' subnet"
+    )
+    foreign_ttl: int = Field(default=30)
+
+
+class Config(BaseModel):
+    bacnet: BacnetConfig
+    devices: list[DeviceConfig]
+    poll_interval_seconds: float = Field(default=10.0, ge=1.0)
+    request_timeout_seconds: float = Field(default=5.0)
+    api_host: str = Field(
+        default="127.0.0.1",
+        description="bind address. Never 0.0.0.0 on a host with a public interface.",
+    )
+    api_port: int = Field(default=8080)
+    secure_cookies: bool = Field(
+        default=False,
+        description="set true once served over HTTPS; keeps the session cookie off plain HTTP",
+    )
+    db_path: str = Field(default="data/bms.db")
+    time_sync_enabled: bool = Field(
+        default=True,
+        description="push this host's local wall-clock time to the thermostats. Their only "
+        "other time source is the Honeywell cloud, which an isolated VLAN cannot reach.",
+    )
+    max_clock_drift_seconds: float = Field(
+        default=30.0, ge=1.0, description="resync once a device clock is this far out"
+    )
+    reconcile_interval_seconds: float = Field(default=300.0, ge=10.0)
+
+    @field_validator("devices")
+    @classmethod
+    def _unique(cls, devices: list[DeviceConfig]) -> list[DeviceConfig]:
+        for field in ("device_id", "address"):
+            seen: dict[object, str] = {}
+            for d in devices:
+                value = getattr(d, field)
+                if value in seen:
+                    raise ValueError(
+                        f"duplicate {field} {value!r}: {seen[value]!r} and {d.name!r}"
+                    )
+                seen[value] = d.name
+        return devices
+
+
+def load(path: str | Path) -> Config:
+    return Config.model_validate(yaml.safe_load(Path(path).read_text()))

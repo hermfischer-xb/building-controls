@@ -1,0 +1,35 @@
+# --- Never commit: site-specific and sensitive -------------------------------
+# The database holds password hashes, session tokens and the building's schedule.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Real device inventory: IP addresses and MAC addresses of a live building.
+# Commit config/devices.example.yaml instead.
+config/devices.yaml
+
+# A dump of a real thermostat's 770 objects, including its device name and
+# address. Useful locally, not something to publish.
+tools/discovery.json
+tools/*-discovery.json
+
+# --- Vendor documentation ----------------------------------------------------
+# The Honeywell TC500A guides are marked "Honeywell proprietary information ...
+# no part shall be reproduced, published, or disclosed to a third party without
+# the express permission of Honeywell International Inc."
+# Facts learned from them are ours to document; the PDFs are not ours to
+# redistribute. Keep them local.
+docs/*.pdf
+
+# --- Python ------------------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- macOS -------------------------------------------------------------------
+.DS_Store

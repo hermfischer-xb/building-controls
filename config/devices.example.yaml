@@ -1,0 +1,39 @@
+# Gateway configuration.
+#
+# The bench thermostat still reports device_id 4194302 (the unconfigured default),
+# so it is listed here under the id it *will* have once configured on the
+# touchscreen: Config > Connection > Wi-Fi > BACnet IP > Device ID.
+#
+# Convention: device_id == room number, and the last octet of the reserved DHCP
+# address matches too, so 192.168.1.101 is device 301 in room 301.
+
+bacnet:
+  # Pin the interface explicitly -- this host has two NICs on 192.168.1.0/24.
+  address: 192.168.1.10/24
+  device_id: 4000000
+  name: bms-gateway
+  # foreign_bbmd: 192.168.0.1:47808   # only if the gateway is off the thermostats' subnet
+
+poll_interval_seconds: 10
+request_timeout_seconds: 5
+
+# Loopback only. This host has a public static IP; the web app must never be
+# reachable on it. Remote access goes over Tailscale/WireGuard.
+api_host: 127.0.0.1
+# Deliberately not 8080 -- that collides with the hermfischer-xb workspace.
+api_port: 8237
+
+devices:
+  - device_id: 301
+    address: 192.168.1.101
+    name: Room 301
+    zone: floor-3
+    # Wi-Fi MAC, for the DHCP reservation on the router.
+    mac: 00:11:22:33:44:55
+
+  # The simulator, for offline work:
+  #   .venv/bin/python tools/sim_tc500a.py --address 192.168.1.10:47809 --instance 2001
+  # - device_id: 2001
+  #   address: 192.168.1.10:47809
+  #   name: Simulated zone
+  #   zone: lab
