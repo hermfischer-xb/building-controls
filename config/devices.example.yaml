@@ -30,6 +30,14 @@ api_port: 8237
 secure_cookies: false
 behind_proxy: false
 
+# One thermostat carries a physical outdoor sensor (Sylk or a UI terminal); the
+# gateway shares its reading to all the others. The thermostats cannot exchange
+# it themselves -- no COV, and they never originate reads -- so this is the only
+# way, and it needs no thermostat-to-thermostat network access.
+# Leave null until a sensor is fitted; sharing the 65535 "no value" sentinel
+# would set a nonsense outdoor temperature on every other unit.
+outdoor_sensor_device_id: null
+
 devices:
   - device_id: 301
     address: 192.168.1.101

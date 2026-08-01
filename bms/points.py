@@ -152,6 +152,26 @@ POINTS: tuple[Point, ...] = (
         None,
         "no_BypassRemTime -- counts down while bypass is running",
     ),
+    # --- outdoor air ---
+    #
+    # Only one thermostat needs a physical outdoor sensor. The rest receive the
+    # value from the gateway, which is how this device is designed to work: it
+    # ships a watchdog (Cfg_NetOATFailDetDly, 600s) for exactly this, and there is
+    # no peer-to-peer mechanism it could use instead -- it has no COV support and
+    # never originates reads. So sharing stays server-to-device and needs no
+    # thermostat-to-thermostat network access.
+    #
+    # 65535 is the device's "no value" sentinel, not a temperature.
+    Point("oa_temp", "analog-output,16", False, "degF", None, "no_OaTemp -- resulting outdoor temp"),
+    Point("oa_humidity", "analog-output,17", False, "%RH", None, "no_OaHumidity"),
+    Point(
+        "oa_temp_in", "analog-value,89", True, "degF", None,
+        "ni_OutdoorTemp -- write here to share a sensor from another device",
+    ),
+    Point(
+        "oa_humidity_in", "analog-value,194", True, "%RH", None,
+        "ni_OutdoorHum -- companion to oa_temp_in",
+    ),
     # --- schedule ---
     Point(
         "schedule_state",
@@ -162,6 +182,16 @@ POINTS: tuple[Point, ...] = (
         "OccSchedule present value (0=Occ, 1=UnOcc, 3=Standby)",
     ),
 )
+
+# The TC500A reports 65535 for an analog point it has no value for. Treating it
+# as a reading gives you a 65535 degree outdoor temperature and, worse, shares it
+# with every other thermostat.
+NO_VALUE = 65535.0
+
+
+def is_valid(value) -> bool:
+    return isinstance(value, (int, float)) and abs(float(value) - NO_VALUE) > 0.5
+
 
 BY_KEY: dict[str, Point] = {p.key: p for p in POINTS}
 BY_OBJID: dict[str, Point] = {p.objid: p for p in POINTS}

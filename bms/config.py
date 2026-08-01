@@ -87,6 +87,12 @@ class Config(BaseModel):
         default=30.0, ge=1.0, description="resync once a device clock is this far out"
     )
     reconcile_interval_seconds: float = Field(default=300.0, ge=10.0)
+    outdoor_sensor_device_id: int | None = Field(
+        default=None,
+        description="device with a physical outdoor sensor. Its reading is shared to every "
+        "other device by the gateway, because the thermostats cannot exchange it themselves. "
+        "Leave null if no sensor is fitted.",
+    )
 
     @field_validator("devices")
     @classmethod

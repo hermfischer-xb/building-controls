@@ -123,6 +123,39 @@ def build_objects() -> list:
             presentValue=55.0,
             units="degreesFahrenheit",
         ),
+        # --- Outdoor air ---
+        # 65535 is the device's "no value" sentinel, which is what a thermostat
+        # with no outdoor sensor and no network write actually reports. Starting
+        # here rather than at a plausible temperature means the simulator
+        # exercises the "do not share garbage" path by default.
+        AnalogOutputObject(
+            objectIdentifier="analog-output,16",
+            objectName="no_OaTemp",
+            description="Outdoor air temperature",
+            presentValue=65535.0,
+            units="degreesFahrenheit",
+        ),
+        AnalogOutputObject(
+            objectIdentifier="analog-output,17",
+            objectName="no_OaHumidity",
+            description="Outdoor air humidity",
+            presentValue=65535.0,
+            units="percentRelativeHumidity",
+        ),
+        AnalogValueObject(
+            objectIdentifier="analog-value,89",
+            objectName="ni_OutdoorTemp",
+            description="Network outdoor temperature (point sharing)",
+            presentValue=65535.0,
+            units="degreesFahrenheit",
+        ),
+        AnalogValueObject(
+            objectIdentifier="analog-value,194",
+            objectName="ni_OutdoorHum",
+            description="Network outdoor humidity (point sharing)",
+            presentValue=65535.0,
+            units="percentRelativeHumidity",
+        ),
         # --- Occupancy override (Table 37, writable) ---
         MultiStateValueObject(
             objectIdentifier="multi-state-value,4",
@@ -183,14 +216,33 @@ def build_objects() -> list:
     ]
 
 
+# Network inputs the real device copies onto its corresponding output once a value
+# arrives. Verified on hardware: writing ni_OutdoorTemp moved both no_OaTemp and
+# the OaTemp_Display shown on the thermostat's own screen. Without this the
+# simulator accepts a shared reading and then appears to ignore it, which looks
+# exactly like a broken point-sharing implementation.
+INPUT_TO_OUTPUT = (
+    ("ni_OutdoorTemp", "no_OaTemp"),
+    ("ni_OutdoorHum", "no_OaHumidity"),
+)
+
+
 async def drift(app: Application) -> None:
-    """Nudge the space temperature so the poller sees values actually change."""
+    """Nudge the space temperature, and mirror network inputs to their outputs."""
     space_temp = app.get_object_name("no_SpaceTemp")
+    pairs = [
+        (app.get_object_name(src), app.get_object_name(dst))
+        for src, dst in INPUT_TO_OUTPUT
+        if app.get_object_name(src) and app.get_object_name(dst)
+    ]
     while True:
         await asyncio.sleep(5)
         space_temp.presentValue = round(
             min(78.0, max(66.0, space_temp.presentValue + random.uniform(-0.3, 0.3))), 1
         )
+        for src, dst in pairs:
+            if src.presentValue != dst.presentValue:
+                dst.presentValue = src.presentValue
 
 
 async def main() -> None:

@@ -33,6 +33,14 @@ from .points import POINTS, BY_OBJID, Point
 log = logging.getLogger(__name__)
 
 
+# bacpypes3 raises protocol errors that derive from BaseException, NOT Exception.
+# `except Exception` around a BACnet call therefore does not catch a device saying
+# "unknown-object" -- the error sails past every handler and kills the task. This
+# module converts them at the boundary so nothing above has to know, and so an
+# `except Exception` elsewhere behaves the way its author expected.
+BACNET_FAULTS = (ErrorRejectAbortNack, asyncio.TimeoutError, OSError)
+
+
 class DeviceUnreachable(Exception):
     """Raised when a request to a device did not complete.
 
@@ -124,7 +132,7 @@ class BacnetClient:
                     self.app.read_property_multiple(Address(device.address), parameter_list),
                     timeout=self._timeout,
                 )
-            except (ErrorRejectAbortNack, asyncio.TimeoutError, OSError) as err:
+            except BACNET_FAULTS as err:
                 raise DeviceUnreachable(f"{device.name} ({device.address}): {_describe(err)}") from err
 
         values: dict[str, Any] = {}
@@ -157,7 +165,7 @@ class BacnetClient:
                     ),
                     timeout=self._timeout,
                 )
-            except (ErrorRejectAbortNack, asyncio.TimeoutError, OSError) as err:
+            except BACNET_FAULTS as err:
                 raise DeviceUnreachable(f"{device.name} ({device.address}): {_describe(err)}") from err
 
     # --- clock ------------------------------------------------------------------
@@ -184,7 +192,7 @@ class BacnetClient:
                     ),
                     timeout=self._timeout,
                 )
-            except Exception:  # noqa: BLE001 - treated as "unknown", never fatal
+            except (*BACNET_FAULTS, Exception):  # never fatal -- clock is optional
                 return None
 
         try:
@@ -216,18 +224,26 @@ class BacnetClient:
             self.app.request(request)
 
     async def read_device_id(self, device: DeviceConfig) -> int | None:
-        """Read the device's own object identifier, to catch inventory mistakes."""
-        async with self._lock:
-            try:
-                oid = await asyncio.wait_for(
-                    self.app.read_property(
-                        Address(device.address), "device,4194303", "objectIdentifier"
-                    ),
-                    timeout=self._timeout,
-                )
-                return int(oid[1])
-            except Exception:  # noqa: BLE001 - best effort identification only
-                return None
+        """Read the device's own object identifier, to catch inventory mistakes.
+
+        Tries the configured instance first and only then the 4194303 wildcard.
+        The wildcard is what finds a device whose id is *not* what config claims --
+        which is the whole point of this check -- but not every implementation
+        answers it, so a device that rejects it must not look unreachable.
+        """
+        for objid in (f"device,{device.device_id}", "device,4194303"):
+            async with self._lock:
+                try:
+                    oid = await asyncio.wait_for(
+                        self.app.read_property(
+                            Address(device.address), objid, "objectIdentifier"
+                        ),
+                        timeout=self._timeout,
+                    )
+                    return int(oid[1])
+                except (*BACNET_FAULTS, Exception):  # best-effort identification only
+                    continue
+        return None
 
     # --- schedules and holidays -------------------------------------------------
     #
@@ -247,17 +263,32 @@ class BacnetClient:
         self, device: DeviceConfig, objid: str, entries: list[CalendarEntry]
     ) -> None:
         async with self._lock:
-            await asyncio.wait_for(
-                self.app.write_property(Address(device.address), objid, "dateList", entries),
-                timeout=self._timeout,
-            )
+            try:
+                try:
+                    await asyncio.wait_for(
+                        self.app.write_property(Address(device.address), objid, "dateList", entries),
+                        timeout=self._timeout,
+                    )
+                except BACNET_FAULTS as err:
+                    raise DeviceUnreachable(
+                        f"{device.name} ({device.address}): {_describe(err)}"
+                    ) from err
+            except BACNET_FAULTS as err:
+                raise DeviceUnreachable(
+                    f"{device.name} ({device.address}): {_describe(err)}"
+                ) from err
 
     async def read_weekly_schedule(self, device: DeviceConfig, objid: str) -> Any:
         async with self._lock:
-            return await asyncio.wait_for(
-                self.app.read_property(Address(device.address), objid, "weeklySchedule"),
-                timeout=self._timeout,
-            )
+            try:
+                return await asyncio.wait_for(
+                    self.app.read_property(Address(device.address), objid, "weeklySchedule"),
+                    timeout=self._timeout,
+                )
+            except BACNET_FAULTS as err:
+                raise DeviceUnreachable(
+                    f"{device.name} ({device.address}): {_describe(err)}"
+                ) from err
 
     async def write_weekly_schedule(
         self, device: DeviceConfig, objid: str, week: list[Any]
@@ -269,23 +300,33 @@ class BacnetClient:
         firmware was tested against, so always send the full week.
         """
         async with self._lock:
-            await asyncio.wait_for(
-                self.app.write_property(
-                    Address(device.address), objid, "weeklySchedule", week
-                ),
-                timeout=self._timeout,
-            )
+            try:
+                await asyncio.wait_for(
+                    self.app.write_property(
+                        Address(device.address), objid, "weeklySchedule", week
+                    ),
+                    timeout=self._timeout,
+                )
+            except BACNET_FAULTS as err:
+                raise DeviceUnreachable(
+                    f"{device.name} ({device.address}): {_describe(err)}"
+                ) from err
 
     async def write_exception_schedule(
         self, device: DeviceConfig, objid: str, events: list[SpecialEvent]
     ) -> None:
         async with self._lock:
-            await asyncio.wait_for(
-                self.app.write_property(
-                    Address(device.address), objid, "exceptionSchedule", events
-                ),
-                timeout=self._timeout,
-            )
+            try:
+                await asyncio.wait_for(
+                    self.app.write_property(
+                        Address(device.address), objid, "exceptionSchedule", events
+                    ),
+                    timeout=self._timeout,
+                )
+            except BACNET_FAULTS as err:
+                raise DeviceUnreachable(
+                    f"{device.name} ({device.address}): {_describe(err)}"
+                ) from err
 
 
 def holiday_event(calendar_objid: str, state: int, priority: int = 1) -> SpecialEvent:
