@@ -1,18 +1,37 @@
-# BMS — building management for Honeywell TC500A thermostats
+# building-controls
 
-An on-premises building management system for Honeywell TC500A commercial
-thermostats over **BACnet/IP**. Polls thermostats, holds the building's intended
-schedule in a database, reconciles that intent onto the devices, and exposes a
-small web interface — including a phone-sized page a tenant can use to start the
-air conditioning before they arrive.
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 
-Built and verified against real hardware: a TC500A-N running firmware
-`01.01.16.00`.
+On-premises building controls for a small commercial building. Today it manages
+**Honeywell TC500A** thermostats over **BACnet/IP**: polling them, holding the
+building's intended schedule in a database, reconciling that intent onto the
+devices, and serving a small web interface — including a phone-sized page a
+tenant can use to start the air conditioning before they arrive.
 
-> **Safety.** This software controls HVAC equipment in an occupied building. It
-> is not life-safety rated and must not be relied on for freeze protection,
-> smoke control, or anything an authority having jurisdiction inspects. Keep the
-> thermostats' own limits and safeties configured and working.
+It is structured to grow into lighting and access control; see
+[Roadmap](#roadmap).
+
+Built and verified against real hardware: a **TC500A-N** on firmware
+`01.01.16.00`. Along the way it documents several places where the vendor's own
+integration guide is **wrong** — see
+[Corrections to the vendor documentation](#corrections-to-the-vendor-documentation).
+
+> [!WARNING]
+> **This controls HVAC equipment in an occupied building.** It is not
+> life-safety rated and must not be relied on for freeze protection, smoke
+> control, or anything an authority having jurisdiction inspects. Keep the
+> thermostats' own limits and safeties configured and working. See
+> [Project status](#project-status) before deploying it anywhere that matters.
+
+## Project status
+
+**Early but working.** Every feature listed below has been exercised against a
+real thermostat, not just unit-tested. It currently runs against a single-device
+bench setup; it has not yet run a full building unattended for months.
+
+Interfaces should be considered unstable — the HTTP API and the database schema
+may change without a migration path until there is a tagged release.
 
 ---
 
@@ -115,7 +134,10 @@ port (47808) → DHCP or static. Requires the installer passcode.
   reservation.
 - Selecting BACnet IP disables the Honeywell Occupant app.
 - Switching between IP and MS/TP reboots the device.
-- **AP client isolation must be off**, or nothing is reachable.
+- **AP client isolation may stay on.** It blocks broadcast discovery, but the
+  gateway is config-driven and every poll and write is unicast, so only
+  `tools/discover.py` is affected — run it during commissioning, or use
+  `--target <ip>` to unicast at a known address.
 
 ## First run
 
@@ -219,7 +241,7 @@ not take. Current drift per device is in `GET /reconcile`.
 
 ---
 
-## Layout
+## Repository layout
 
 ```
 bms/
@@ -271,17 +293,106 @@ Nothing here survives a reboot yet. Before this is load-bearing:
 
 **Networking.** BACnet has no authentication or encryption whatsoever, and the
 TC500A honours `device-communication-control` and `reinitialize-device` from
-anyone who can reach it. Put the thermostats on an isolated VLAN if you can. Do
-not bind this application to a public interface — it refuses `0.0.0.0` on
-startup. Reach it over Tailscale or WireGuard, and set `secure_cookies: true`
-once it is served over HTTPS.
+anyone who can reach it. Anyone on the same network can reboot every thermostat
+in the building.
 
-## Status
+Put the thermostats on their **own VLAN**, with a dedicated SSID mapped to it and
+no inter-VLAN routing except to the gateway host. Note that a separate *IP
+subnet* on a shared VLAN is not isolation — anything on that L2 can simply add an
+address in your range and reach the devices. A MAC ACL controls which stations
+may *associate*; it does not control who can reach them afterwards. Only the VLAN
+boundary does that.
 
-Working: discovery, polling, setpoints, occupancy override, bypass, weekly
-schedules, groups, day overrides, holidays, dated exceptions, reconciliation,
-auth and roles, audit log, tenant mobile page.
+The gateway then sits dual-homed: one interface on the control VLAN (pinned via
+`bacnet.address`), one on the normal LAN. Do not bind this application to a
+public interface — it refuses `0.0.0.0` on startup. Reach it over Tailscale or
+WireGuard, and set `secure_cookies: true` once it is served over HTTPS.
 
-Not built yet: an operator UI beyond the status page and `/docs`; scheduled
-(delayed-start) pre-cooling; per-holiday occupancy states on one device; lighting
-control; access control integration.
+An isolated VLAN needs no internet: clock sync comes from the gateway over
+BACnet, and firmware is applied at commissioning time before the device moves
+onto the control network.
+
+## Hardware tested
+
+| Device | Status |
+|---|---|
+| Honeywell TC500A-N, firmware `01.01.16.00` | ✅ verified end to end |
+| Other TC500A variants (`-W`, MS/TP) | ❔ untested; MS/TP would need a different transport |
+| Anything else | ❌ not supported yet |
+
+`tools/discover.py` will dump any BACnet device's object map, so it is a
+reasonable starting point for adapting this to other equipment.
+
+## Roadmap
+
+The near-term work is a **driver abstraction** — extracting the TC500A-specific
+code behind a device interface so the scheduling, holiday and reconciliation
+layers become device-agnostic. Everything below depends on it.
+
+- [ ] `drivers/` split, with the scheduling layer dealing in occupancy states
+      rather than BACnet objects
+- [ ] **Lighting**, via a BACnet/IP relay module. Choosing BACnet means lighting
+      inherits the existing poller, schedule groups, holiday calendars,
+      reconciler and roles almost for free
+- [ ] **Access control**, via Axis A1210/A1610 network door controllers over the
+      VAPIX HTTP API — chosen for a publicly documented API with no NDA or
+      partner fee
+- [ ] **Badge-driven comfort**: first badge-in on a weekend starts that suite's
+      HVAC and lights; last badge-out plus a timeout releases them
+- [ ] An operator UI for managers (currently API and `/docs` only)
+- [ ] Delayed-start pre-cooling ("be cool by 2pm" rather than "start now")
+- [ ] Per-holiday occupancy states on one device (the device has ten calendar
+      objects; only one is currently used)
+
+Access control will integrate with a listed, purpose-built controller rather than
+driving Wiegand and door relays directly. Door hardware on egress paths is
+life-safety territory with UL 294 and NFPA 101 implications, and the controller
+must keep working when this application is down.
+
+## Contributing
+
+Issues and pull requests are welcome, particularly:
+
+- **Other BACnet thermostats.** The hard part of this project was establishing
+  what the hardware actually does. A `tools/discover.py` dump from a different
+  model is genuinely useful even without code.
+- **Corrections.** If something here contradicts your hardware, say so — the
+  vendor documentation already contradicts mine.
+
+Running the tests needs a thermostat or the simulator plus a running gateway:
+
+```bash
+.venv/bin/python tools/sim_tc500a.py --address 192.168.1.10:47809 --instance 2001
+.venv/bin/python -m bms --config config/devices.yaml
+
+BMS_ADMIN=herm:secret BMS_MANAGER=bldgmgr:secret BMS_TENANT=suite301:secret \
+    .venv/bin/python tools/test_roles.py
+```
+
+Never commit `config/devices.yaml`, `data/`, `tools/discovery.json`, or vendor
+PDFs — all are gitignored, and all contain either credentials or a real
+building's addressing.
+
+## Security
+
+BACnet is unauthenticated by design and this software controls physical
+equipment. If you find a vulnerability, please report it privately via GitHub
+Security Advisories rather than opening a public issue.
+
+Known and accepted limitations, documented rather than hidden:
+
+- The gateway trusts anything that can reach its port; it is intended to bind
+  loopback behind a VPN, and refuses to bind `0.0.0.0`.
+- There is no rate limiting on the API beyond login attempts.
+- Session cookies are only `Secure` when `secure_cookies: true` is set, which
+  requires serving over HTTPS.
+
+## License
+
+[Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution and
+trademark information.
+
+Honeywell, TC500A, Axis and Ruckus are trademarks of their respective owners.
+This project is not affiliated with or endorsed by any of them. Vendor
+documentation is proprietary and is deliberately not included in this
+repository — only findings derived from testing hardware.
