@@ -76,6 +76,13 @@ wrong in revision **31-00478-06**, the current published version as of August
 | Ch. 10: *"Current implementation of thermostat does not support calendar object ... HMI is the option to configure holiday schedule"* | All 10 calendar objects work. `dateList` reads **and** writes, round-tripping exactly. Holidays are fully configurable over BACnet |
 | Ch. 10: *"Thermostat does not support floating date type special events"* | `weekNDay` entries are accepted and honoured — "4th Thursday of November" works |
 | Table 45: the schedule object is named `EnumSchedule` | It is named `OccSchedule`. The same document's proprietary-properties list also says `OccSchedule`, so it contradicts itself |
+| `ni_BypassValue` is described as the "Bypass Value to enable Bypass Time" | It does **not** set the duration. `Cfg_Thermostat_BypOverrideTime` does. Write only `ni_BypassValue` and every bypass runs for whatever the config point holds, silently ignoring the request |
+| `ni_OccManCom` is listed as the network occupancy override, with no preconditions | Inert until `Cfg_Thermostat_Override` is enabled. Without it the write succeeds, the point reads back the new value, and effective occupancy never moves |
+
+Two of those are the nastiest kind of bug: the write is accepted, the value
+reads back correctly, and nothing happens. `no_BypassRemTime` is similar — it
+reports the configured bypass period and was not observed decrementing, so this
+project states it as a period rather than a live countdown.
 
 Declaring the current day a holiday flips the device within ~3 seconds:
 `schedule_state 0→1`, `effective_occupancy 1→2`, effective setpoints `68/76 →

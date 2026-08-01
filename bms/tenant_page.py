@@ -80,9 +80,13 @@ def render(device_id: int, name: str, state: dict) -> str:
     if not online or stale:
         status_class, status = "warn", "Can't reach the thermostat right now"
     elif active and isinstance(remaining, (int, float)) and remaining > 0:
+        # no_BypassRemTime reports the configured bypass period and was not
+        # observed decrementing minute by minute, so this is stated as the
+        # period rather than a live countdown. Claiming "2h 47m left" from a
+        # value that does not tick would be a lie the tenant could catch.
         hours, minutes = divmod(int(remaining), 60)
-        left = f"{hours}h {minutes:02d}m" if hours else f"{minutes} min"
-        status_class, status = "on", f"Running now — {left} left"
+        period = f"{hours}h {minutes:02d}m" if hours else f"{minutes} min"
+        status_class, status = "on", f"Running now — about {period}"
     elif occupancy == 1:  # OccupancyState.OCCUPIED
         status_class, status = "on", "Already occupied on the normal schedule"
     else:

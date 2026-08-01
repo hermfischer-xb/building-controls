@@ -145,6 +145,89 @@ def chip(text: str, kind: str = "") -> str:
     return f'<span class="chip {kind}">{e(text)}</span>'
 
 
+# Inline SVG rather than an icon font or emoji: the page has to stay
+# self-contained, and emoji render inconsistently across phones and desktops --
+# a flame that shows as a coloured square on one device is worse than no icon.
+_ICONS = {
+    "cool": (
+        '<path d="M12 2v20M4.2 7l15.6 9M19.8 7L4.2 16M12 6.5 9.5 4M12 6.5 14.5 4'
+        'M12 17.5 9.5 20M12 17.5 14.5 20"/>'
+    ),
+    "heat": (
+        '<path d="M12 22c3.3 0 6-2.6 6-5.9 0-4-3-5.900-3-9.6 0-1.2-1-2.5-3-2.5'
+        ' 1 3.4-1.2 4.9-2.6 6.6C8 12.3 6 13.8 6 16.1 6 19.4 8.7 22 12 22Z"/>'
+    ),
+    # A four-blade fan, drawn so the shape still reads at 14px.
+    "fan": (
+        '<circle cx="12" cy="12" r="2"/>'
+        '<path d="M12 10c0-3 .8-6 3.2-6 1.8 0 2.6 2.4.6 4.2C14.4 9.3 13 9.8 12 10Z"/>'
+        '<path d="M14 12c3 0 6 .8 6 3.2 0 1.8-2.4 2.6-4.2.6C14.7 14.4 14.2 13 14 12Z"/>'
+        '<path d="M12 14c0 3-.8 6-3.2 6-1.8 0-2.6-2.4-.6-4.2C9.6 14.7 11 14.2 12 14Z"/>'
+        '<path d="M10 12c-3 0-6-.8-6-3.2 0-1.8 2.4-2.6 4.2-.6C9.3 9.6 9.8 11 10 12Z"/>'
+    ),
+    "econ": '<path d="M4 20c0-8 6-14 16-15 0 10-6 15-13 15H4Zm3 0c2-5 5-8 9-10"/>',
+}
+
+ICON_CSS = """
+.act{display:inline-flex;align-items:center;gap:.22rem;margin-right:.5rem;
+     font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+.act svg{width:15px;height:15px;flex:none}
+.act.cool{color:#1565d8} .act.heat{color:#d1611a}
+.act.fan{color:var(--muted)} .act.econ{color:#137333}
+@media(prefers-color-scheme:dark){.act.cool{color:#7fb0ff} .act.heat{color:#ffab6b}
+  .act.econ{color:#81c995}}
+.act.spin svg{animation:spin 2.6s linear infinite;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.act.spin svg{animation:none}}
+.idle{color:var(--muted);font-size:.8rem}
+"""
+
+
+def icon(kind: str, label: str = "", spin: bool = False) -> str:
+    """One activity indicator. `label` is drawn beside it, e.g. a stage count."""
+    path = _ICONS.get(kind, "")
+    classes = f"act {kind}" + (" spin" if spin else "")
+    text = f"<span>{e(label)}</span>" if label else ""
+    return (
+        f'<span class="{classes}" title="{e(kind)}">'
+        f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"'
+        f' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{path}</svg>'
+        f"{text}</span>"
+    )
+
+
+def activity(values: dict) -> str:
+    """Render what the equipment is doing, from the polled stage counts.
+
+    Deliberately driven by active stages rather than by the selected mode: a unit
+    sitting in HEAT with nothing energised is idle, and showing a flame for it
+    would make the whole dashboard look busy at all times.
+    """
+
+    def count(key: str) -> int:
+        v = values.get(key)
+        return int(v) if isinstance(v, (int, float)) else 0
+
+    out = []
+    cool, heat, aux = count("active_cool_stages"), count("active_heat_stages"), count(
+        "active_aux_heat_stages"
+    )
+    if cool:
+        out.append(icon("cool", str(cool) if cool > 1 else ""))
+    if heat:
+        out.append(icon("heat", str(heat) if heat > 1 else ""))
+    if aux:
+        out.append(icon("heat", f"aux {aux}" if aux > 1 else "aux"))
+    if values.get("economizer_enabled"):
+        out.append(icon("econ"))
+    if values.get("fan_running"):
+        out.append(icon("fan", spin=True))
+
+    if not out:
+        return '<span class="idle">idle</span>' if values else "—"
+    return "".join(out)
+
+
 def page(title: str, user: Any, body: str, active: str = "") -> str:
     """Wrap page content in the shared shell.
 
@@ -165,7 +248,7 @@ def page(title: str, user: Any, body: str, active: str = "") -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{e(title)} · building-controls</title>
-<style>{CSS}</style>
+<style>{CSS}{ICON_CSS}</style>
 <header><div class="bar">
   <span class="brand">building-controls</span>
   <nav>{links}</nav>

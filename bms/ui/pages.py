@@ -12,9 +12,9 @@ import datetime as dt
 from typing import Any
 
 from ..holidays import describe, occurrences
-from ..points import SETPOINT_LIMITS, OccupancyState, ScheduleState
+from ..points import SETPOINT_LIMITS, OccupancyState, ScheduleState, TempMode
 from ..schedules import DAYS, week_summary
-from .layout import chip, e, num, page
+from .layout import activity, chip, e, icon, num, page
 
 DAY_LABELS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -24,6 +24,12 @@ OCC_LABEL = {
     OccupancyState.BYPASS: ("Bypass", "warn"),
     OccupancyState.STANDBY: ("Standby", ""),
     OccupancyState.NO_OVERRIDE: ("No override", ""),
+}
+
+MODE_LABEL = {
+    int(TempMode.COOL): "Cool", int(TempMode.REHEAT): "Reheat",
+    int(TempMode.HEAT): "Heat", int(TempMode.EMERGENCY_HEAT): "Emergency heat",
+    int(TempMode.OFF): "Off",
 }
 
 SCHED_LABEL = {
@@ -72,6 +78,7 @@ def dashboard(user, devices: list[dict], reconcile: dict | None) -> str:
  <td>{_status_chip(d)} {bypass}</td>
  <td class="num big" style="font-size:1.25rem">{num(v.get('space_temp'), '°')}</td>
  <td class="num">{num(v.get('effective_heat_sp'), '', 0)} / {num(v.get('effective_cool_sp'), '', 0)}</td>
+ <td>{activity(v)}</td>
  <td>{_occ_chip(v.get('effective_occupancy'))}</td>
  <td class="num sub">{num(d.get('age_seconds'), 's', 0)}</td>
 </tr>"""
@@ -108,7 +115,8 @@ def dashboard(user, devices: list[dict], reconcile: dict | None) -> str:
 {banner}
 <div class="card"><div class="wrap"><table>
  <tr><th>Device</th><th>Status</th><th class="num">Space</th>
-     <th class="num">Heat / Cool</th><th>Occupancy</th><th class="num">Polled</th></tr>
+     <th class="num">Heat / Cool</th><th>Activity</th><th>Occupancy</th>
+     <th class="num">Polled</th></tr>
  {''.join(rows)}
 </table></div></div>
 {drift_note}
@@ -249,6 +257,14 @@ device immediately; the schedule still decides which pair is in effect.</p></div
   <div class="sub">{_occ_chip(v.get('effective_occupancy'))}
       schedule says {e(SCHED_LABEL.get(v.get('schedule_state'), '—'))}</div>
  </div>
+</div>
+
+<div class="card">
+ <div class="sub">Equipment</div>
+ <div style="margin:.4rem 0 .2rem;font-size:1.05rem">{activity(v)}</div>
+ <div class="sub">mode {e(MODE_LABEL.get(v.get('temp_mode'), '—'))} ·
+   {num(v.get('active_heat_stages'), '', 0)} heat /
+   {num(v.get('active_cool_stages'), '', 0)} cool stage(s) active</div>
 </div>
 
 <h2>Start conditioning now</h2>

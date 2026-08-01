@@ -25,6 +25,21 @@ class ScheduleState(IntEnum):
     STANDBY = 3
 
 
+class TempMode(IntEnum):
+    """no_EffTempMode -- which mode the thermostat is in.
+
+    This is not the same as "currently running": a unit can sit in HEAT mode with
+    no stages energised. The stage counts say what the equipment is actually
+    doing; this says what it would do if it called for something.
+    """
+
+    COOL = 1
+    REHEAT = 2
+    HEAT = 3
+    EMERGENCY_HEAT = 4
+    OFF = 5
+
+
 class OccupancyState(IntEnum):
     """Values used by ni_OccManCom and no_EffOccState (device's own stateText)."""
 
@@ -62,6 +77,34 @@ POINTS: tuple[Point, ...] = (
         OccupancyState,
         "Occupancy state the thermostat is actually acting on",
     ),
+    # --- what the equipment is doing right now ---
+    # Stage counts rather than the mode, because that is the difference between
+    # "set to heat" and "heating". A dashboard that shows the mode makes every
+    # idle unit look like it is running.
+    Point(
+        "temp_mode", "multi-state-output,6", False, None, TempMode,
+        "no_EffTempMode -- selected mode, not necessarily running",
+    ),
+    Point(
+        "active_heat_stages", "analog-output,7", False, "stages", None,
+        "no_ActiveHeatStages -- heat stages energised now",
+    ),
+    Point(
+        "active_cool_stages", "analog-output,11", False, "stages", None,
+        "no_ActiveCoolStages -- cool stages energised now",
+    ),
+    Point(
+        "active_aux_heat_stages", "analog-output,8", False, "stages", None,
+        "no_ActiveAuxHeatStages -- backup/auxiliary heat",
+    ),
+    Point(
+        "fan_running", "binary-output,19", False, None, None,
+        "no_FanStart -- supply fan commanded on",
+    ),
+    Point(
+        "economizer_enabled", "binary-output,22", False, None, None,
+        "no_EconEn -- economizer providing free cooling",
+    ),
     # --- setpoints, writable ---
     Point("occ_cool_sp", "analog-value,4", True, "degF", None, "Occupied cooling setpoint"),
     Point("occ_heat_sp", "analog-value,7", True, "degF", None, "Occupied heating setpoint"),
@@ -80,6 +123,23 @@ POINTS: tuple[Point, ...] = (
     ),
     Point("bypass_enable", "binary-value,1", True, None, None, "ni_BypassState"),
     Point("bypass_minutes", "analog-value,2", True, "minutes", None, "ni_BypassValue"),
+    # Two gating points the integration guide does not connect to anything, both
+    # established by testing. Without them the obvious writes are accepted and
+    # then quietly ignored:
+    #
+    #   ni_BypassValue does NOT set the bypass duration -- this config point does.
+    #   Writing 60 to ni_BypassValue and starting a bypass still runs for whatever
+    #   this holds (180 by default).
+    Point(
+        "bypass_duration_cfg", "analog-value,10", True, "minutes", None,
+        "Cfg_Thermostat_BypOverrideTime -- the actual bypass duration",
+    ),
+    #   ni_OccManCom does nothing at all until this is enabled. With it off the
+    #   point reads back the value written while effective occupancy never moves.
+    Point(
+        "network_override_enable", "binary-value,135", True, None, None,
+        "Cfg_Thermostat_Override -- gates whether ni_OccManCom is honoured",
+    ),
     # Read-back of what the device is actually doing with the bypass, as opposed
     # to what we last asked for. The remaining-time countdown is what a tenant
     # sees ("occupied for another 2h 47m"), so it has to come from the device.

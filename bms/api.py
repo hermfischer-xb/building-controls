@@ -359,18 +359,33 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
                 400, f"state must be one of {[e.name for e in OccupancyState]}"
             ) from None
 
+        # ni_OccManCom is inert until Cfg_Thermostat_Override is enabled: the write
+        # succeeds, the point reads back the new value, and effective occupancy
+        # never moves. Enable the gate first, and drop it again when handing
+        # control back, so the device is left as it was found.
         try:
+            releasing = state is OccupancyState.NO_OVERRIDE
+            if not releasing:
+                await client.write_point(device, BY_KEY["network_override_enable"], 1)
             await client.write_point(device, BY_KEY["occupancy_override"], int(state))
+            if releasing:
+                await client.write_point(device, BY_KEY["network_override_enable"], 0)
         except DeviceUnreachable as err:
             raise HTTPException(503, str(err)) from err
 
         cache.apply_local_write(device_id, "occupancy_override", int(state))
+        cache.apply_local_write(device_id, "network_override_enable", 0 if releasing else 1)
         return {"device_id": device_id, "override": state.name}
 
     @app.post("/devices/{device_id}/bypass")
     async def bypass(device_id: int, body: BypassRequest,
                      user: User = Depends(current_user)) -> dict[str, Any]:
         """Timed occupancy bypass -- the 'I'm here now' path for a tenant.
+
+        The duration comes from Cfg_Thermostat_BypOverrideTime, *not* from
+        ni_BypassValue. Writing only the latter -- which is what the point naming
+        suggests -- is accepted and then ignored, and every bypass runs for
+        whatever the config point holds. Verified on firmware 01.01.16.00.
 
         Order matters: write the duration before enabling, or the device starts a
         timer with whatever value was there previously.
@@ -380,6 +395,12 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         """
         device = require_device(device_id, user)
         try:
+            if body.minutes > 0:
+                await client.write_point(
+                    device, BY_KEY["bypass_duration_cfg"], float(body.minutes)
+                )
+            # Kept consistent with the config point even though the device does not
+            # read it for duration, so the two never disagree on inspection.
             await client.write_point(device, BY_KEY["bypass_minutes"], float(body.minutes))
             await client.write_point(
                 device, BY_KEY["bypass_enable"], 1 if body.minutes > 0 else 0
