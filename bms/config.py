@@ -62,7 +62,20 @@ class Config(BaseModel):
     api_port: int = Field(default=8080)
     secure_cookies: bool = Field(
         default=False,
-        description="set true once served over HTTPS; keeps the session cookie off plain HTTP",
+        description="set true once served over HTTPS; keeps the session cookie off plain HTTP. "
+        "Setting it while still on plain HTTP silently breaks login -- the browser accepts "
+        "the cookie and then never sends it back.",
+    )
+    behind_proxy: bool = Field(
+        default=False,
+        description="true when a reverse proxy or tunnel terminates TLS in front of this app. "
+        "Only then is the client-IP header trusted -- believing it unconditionally would let "
+        "anyone forge an address and walk past the login throttle.",
+    )
+    client_ip_header: str = Field(
+        default="cf-connecting-ip",
+        description="header carrying the real client address. 'cf-connecting-ip' for Cloudflare "
+        "Tunnel, 'x-forwarded-for' for Caddy or nginx. Ignored unless behind_proxy is true.",
     )
     db_path: str = Field(default="data/bms.db")
     time_sync_enabled: bool = Field(

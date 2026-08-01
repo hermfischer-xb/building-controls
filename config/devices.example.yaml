@@ -23,6 +23,13 @@ api_host: 127.0.0.1
 # Deliberately not 8080 -- that collides with the hermfischer-xb workspace.
 api_port: 8237
 
+# Set all three together, once a tunnel or reverse proxy terminates TLS in front:
+#   secure_cookies: true          # AFTER https works, never before
+#   behind_proxy: true            # only then is the client-IP header believed
+#   client_ip_header: cf-connecting-ip   # or x-forwarded-for for Caddy/nginx
+secure_cookies: false
+behind_proxy: false
+
 devices:
   - device_id: 301
     address: 192.168.1.101

@@ -152,6 +152,24 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             raise HTTPException(404, f"no device {device_id} in inventory")
         return device
 
+    def client_ip(request: Request) -> str:
+        """The caller's real address, for throttling and the audit log.
+
+        Behind a proxy `request.client.host` is the proxy itself, so every failed
+        login on the internet would land in one throttle bucket and eight bad
+        attempts from anyone would lock out everybody.
+
+        The header is only trusted when `behind_proxy` is set. Trusting it
+        unconditionally would be worse than not having it: a direct caller could
+        forge an address per request and never trip the throttle at all.
+        """
+        if cfg.behind_proxy:
+            forwarded = request.headers.get(cfg.client_ip_header)
+            if forwarded:
+                # X-Forwarded-For is a chain; the original client is leftmost.
+                return forwarded.split(",")[0].strip()
+        return request.client.host if request.client else "unknown"
+
     def _same_origin(request: Request) -> bool:
         """Reject cross-site state changes.
 
@@ -180,7 +198,7 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         password: str = Form(...),
         next: str = Form("/"),
     ):
-        client = request.client.host if request.client else "unknown"
+        client = client_ip(request)
         if throttle.blocked(username, client):
             store.log(username, "login.throttled", client, outcome="error")
             return HTMLResponse(

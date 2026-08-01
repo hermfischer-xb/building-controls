@@ -34,7 +34,17 @@ def main() -> None:
             "Bind 127.0.0.1 and reach it over the VPN."
         )
 
-    uvicorn.run(app, host=cfg.api_host, port=cfg.api_port, log_level=args.log_level)
+    uvicorn.run(
+        app,
+        host=cfg.api_host,
+        port=cfg.api_port,
+        log_level=args.log_level,
+        # Parse X-Forwarded-* only when a proxy is declared, and only from the
+        # loopback address it connects from. Left on by default, uvicorn would
+        # believe those headers from anyone that reached it directly.
+        proxy_headers=cfg.behind_proxy,
+        forwarded_allow_ips="127.0.0.1" if cfg.behind_proxy else None,
+    )
 
 
 if __name__ == "__main__":
