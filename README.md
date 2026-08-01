@@ -54,24 +54,40 @@ from the manual:
 So the database holds what the building *should* do, the thermostats hold what
 they *are* doing, and a reconciler closes the gap on a loop.
 
+## Vendor documentation
+
+Honeywell publishes both manuals. They are proprietary and not redistributed
+here, so these link to Honeywell's own copies:
+
+- [TC500A User Guide (31-00400M-11)](https://prod-edam.honeywell.com/content/dam/honeywell-edam/hbt/en-us/documents/manuals-and-guides/user-manuals/hon-ba-bms-TC500A-User-Guide-31-00400M-11.pdf?download=false)
+- [TC500A BACnet Integration Guide (31-00478-06)](https://prod-edam.honeywell.com/content/dam/honeywell-edam/hbt/en-us/documents/manuals-and-guides/user-manuals/hon-ba-bms-TC500A-BACnet-Integration-Guide-31-00478-06.pdf?download=false)
+
+Read the next section before trusting either of them on schedules and holidays.
+
 ## Corrections to the vendor documentation
 
-The TC500A BACnet Integration Guide (31-00478) is wrong in several places that
-matter. Verified on hardware:
+**The BACnet Integration Guide is wrong about calendars and holidays**, and still
+wrong in revision **31-00478-06**, the current published version as of August
+2026. Each of these was verified by writing to a TC500A-N on firmware
+`01.01.16.00` and reading the result back:
 
-| Guide says | Actually |
+| The guide says | The hardware does |
 |---|---|
-| Ch. 10: "thermostat does not support calendar object" | All 10 calendar objects work. `dateList` reads *and* writes, round-tripping exactly |
-| Floating-date special events unsupported | `weekNDay` entries are accepted and honoured — "4th Thursday of November" works |
-| Table 45: schedule object is named `EnumSchedule` | It is named `OccSchedule` |
-| Holidays must be configured at the touchscreen | Fully configurable over BACnet |
+| Ch. 10: *"Current implementation of thermostat does not support calendar object ... HMI is the option to configure holiday schedule"* | All 10 calendar objects work. `dateList` reads **and** writes, round-tripping exactly. Holidays are fully configurable over BACnet |
+| Ch. 10: *"Thermostat does not support floating date type special events"* | `weekNDay` entries are accepted and honoured — "4th Thursday of November" works |
+| Table 45: the schedule object is named `EnumSchedule` | It is named `OccSchedule`. The same document's proprietary-properties list also says `OccSchedule`, so it contradicts itself |
 
 Declaring the current day a holiday flips the device within ~3 seconds:
 `schedule_state 0→1`, `effective_occupancy 1→2`, effective setpoints `68/76 →
 55/85`.
 
-Because floating rules are evaluated *by the device*, holidays never need
-re-entering — no annual refresh, no three-year horizon problem.
+The practical consequence is large. Because floating rules are evaluated *by the
+device*, holidays are entered once as rules and never need refreshing — no annual
+re-entry, no three-year horizon problem, and no need to touch 25 touchscreens.
+Anyone following the guide would have built the far worse workaround.
+
+`tools/write_test.py` reproduces all of this: it records each value, writes,
+reads back, reverts, and verifies the revert.
 
 ---
 
