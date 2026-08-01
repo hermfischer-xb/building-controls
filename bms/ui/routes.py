@@ -54,7 +54,9 @@ def build_router(
         if user is None:
             return signin(request)
         status = reconciler.status if user.at_least("manager") else None
-        return HTMLResponse(pages.dashboard(user, visible_devices(user), status))
+        return HTMLResponse(
+            pages.dashboard(user, visible_devices(user), status, reconciler.outdoor)
+        )
 
     @router.get("/ui/devices/{device_id}", response_class=HTMLResponse)
     async def device(request: Request, device_id: int):
@@ -92,6 +94,7 @@ def build_router(
                 user, state.to_dict(cfg.poll_interval_seconds * 3),
                 groups, group_id, overrides, weekly,
                 known_zones=zones.known() if user.at_least("manager") else None,
+                outdoor=reconciler.outdoor,
             )
         )
 

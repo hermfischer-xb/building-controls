@@ -32,6 +32,7 @@ from .schedules import (
     week_to_bacnet,
 )
 from .store import Store
+from .weather import WeatherSource
 from .zones import Zones
 
 log = logging.getLogger(__name__)
@@ -78,6 +79,15 @@ class Reconciler:
         self._last_result: list[dict[str, Any]] = []
         # device_id -> seconds the device clock is ahead of this host
         self._drift: dict[int, float] = {}
+        # Last outdoor reading and where it came from, for the UI.
+        self._outdoor: dict[str, Any] | None = None
+
+        w = cfg.outdoor_weather
+        self._weather = (
+            WeatherSource(zip_code=w.zip_code, country=w.country,
+                          latitude=w.latitude, longitude=w.longitude)
+            if w.enabled else None
+        )
 
     async def start(self, interval_seconds: float = 300.0) -> None:
         self._task = asyncio.create_task(self._run(interval_seconds), name="reconciler")
@@ -100,54 +110,86 @@ class Reconciler:
             await asyncio.sleep(interval)
 
     @property
+    def outdoor(self) -> dict[str, Any] | None:
+        return self._outdoor
+
+    @property
     def status(self) -> dict[str, Any]:
         return {
             "last_run": self._last_run,
             "age_seconds": None if self._last_run is None else round(time.time() - self._last_run, 1),
             "devices": self._last_result,
             "clock_drift_seconds": {str(k): round(v, 1) for k, v in self._drift.items()},
+            "outdoor": self._outdoor,
         }
 
+    async def _outdoor_reading(self) -> tuple[float, float | None, str, int | None] | None:
+        """Where outdoor conditions come from, best source first.
+
+        A physical sensor beats a regional forecast: it is the actual air at this
+        building, and economizer decisions are made from it. Public weather is the
+        fallback, which matters because the thermostat's own zip-code lookup is
+        unavailable once BACnet/IP is selected and the VLAN is isolated.
+
+        Returns (temperature, humidity, source label, device to skip) or None.
+        """
+        source_id = self._cfg.outdoor_sensor_device_id
+        if source_id is not None:
+            source = next((d for d in self._cfg.devices if d.device_id == source_id), None)
+            if source is None:
+                log.warning("outdoor_sensor_device_id %s is not in the inventory", source_id)
+            else:
+                try:
+                    values = await self._client.read_points(source)
+                    temp, humidity = values.get("oa_temp"), values.get("oa_humidity")
+                    if is_valid(temp):
+                        return (
+                            float(temp),
+                            float(humidity) if is_valid(humidity) else None,
+                            f"sensor at {source.name}",
+                            source_id,
+                        )
+                    # Falling through to weather rather than giving up: a failed
+                    # sensor should degrade to a regional value, not to nothing.
+                    log.info("%s has no valid outdoor reading; trying weather", source.name)
+                except DeviceUnreachable as err:
+                    log.warning("outdoor sensor device unreachable: %s", err)
+
+        if self._weather is not None:
+            conditions = await self._weather.current()
+            if conditions is not None:
+                return (
+                    conditions.temperature_f,
+                    conditions.humidity_pct,
+                    f"weather for {conditions.place}",
+                    None,
+                )
+        return None
+
     async def _share_outdoor_air(self, actor: str) -> str | None:
-        """Copy the outdoor reading from the one sensor to every other device.
+        """Write the outdoor reading into every thermostat.
 
         The thermostats cannot do this between themselves -- no COV, and they
         never originate reads -- so the gateway is the only thing that can. The
         device is built for it: ni_OutdoorTemp is a writable input backed by a
         600 second watchdog, which is why this runs on the reconcile interval
         rather than once at startup.
-
-        Returns a short description for the cycle log, or None if nothing to do.
         """
-        source_id = self._cfg.outdoor_sensor_device_id
-        if source_id is None:
+        reading = await self._outdoor_reading()
+        if reading is None:
+            self._outdoor = None
             return None
 
-        source = next((d for d in self._cfg.devices if d.device_id == source_id), None)
-        if source is None:
-            log.warning("outdoor_sensor_device_id %s is not in the inventory", source_id)
-            return None
-
-        try:
-            values = await self._client.read_points(source)
-        except DeviceUnreachable as err:
-            log.warning("outdoor sensor device unreachable: %s", err)
-            return None
-
-        temp, humidity = values.get("oa_temp"), values.get("oa_humidity")
-        if not is_valid(temp):
-            # Sharing the 65535 sentinel would set a 65535 degree outdoor
-            # temperature on 24 thermostats. Leave them to their own watchdogs.
-            log.warning("%s has no valid outdoor reading (%s); not sharing", source.name, temp)
-            return None
-
+        temp, humidity, label, skip_id = reading
         shared = 0
         for device in self._cfg.devices:
-            if device.device_id == source_id:
+            # The device with the physical sensor already knows; writing to it
+            # would overwrite its own measurement with a copy of itself.
+            if skip_id is not None and device.device_id == skip_id:
                 continue
             try:
                 await self._client.write_point(device, BY_KEY["oa_temp_in"], float(temp))
-                if is_valid(humidity):
+                if humidity is not None:
                     await self._client.write_point(
                         device, BY_KEY["oa_humidity_in"], float(humidity)
                     )
@@ -155,10 +197,17 @@ class Reconciler:
             except DeviceUnreachable as err:
                 log.warning("could not share outdoor air to %s: %s", device.name, err)
 
+        self._outdoor = {
+            "temperature_f": round(float(temp), 1),
+            "humidity_pct": round(humidity, 1) if humidity is not None else None,
+            "source": label,
+            "devices": shared,
+            "at": time.time(),
+        }
         if shared:
-            self._store.log(actor, "reconcile.outdoor_air", source.name,
+            self._store.log(actor, "reconcile.outdoor_air", label,
                             {"temp": round(float(temp), 1), "devices": shared})
-            return f"outdoor {float(temp):.1f}F from {source.name} -> {shared} device(s)"
+            return f"outdoor {float(temp):.1f}F from {label} -> {shared} device(s)"
         return None
 
     async def reconcile_all(self, actor: str = "system") -> list[DeviceResult]:

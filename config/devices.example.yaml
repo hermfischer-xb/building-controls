@@ -38,6 +38,14 @@ behind_proxy: false
 # would set a nonsense outdoor temperature on every other unit.
 outdoor_sensor_device_id: null
 
+# Fallback when no physical sensor is fitted, or when it fails. Selecting
+# BACnet/IP disables the thermostat's own internet path and an isolated VLAN
+# removes it entirely, so its built-in zip-code lookup is unavailable -- but the
+# gateway has internet and can supply the same value. Open-Meteo needs no API key.
+outdoor_weather:
+  enabled: true
+  zip_code: "91436"
+
 devices:
   - device_id: 301
     address: 192.168.1.101

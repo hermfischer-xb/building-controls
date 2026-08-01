@@ -50,6 +50,22 @@ class BacnetConfig(BaseModel):
     foreign_ttl: int = Field(default=30)
 
 
+class OutdoorWeatherConfig(BaseModel):
+    """Public weather as an outdoor-temperature source.
+
+    Selecting BACnet/IP disables the thermostat's own internet path, and an
+    isolated VLAN removes it entirely, so its built-in zip-code outdoor
+    temperature is unavailable. The gateway has internet and can supply the same
+    value through the network input a physical sensor would use.
+    """
+
+    enabled: bool = Field(default=False)
+    zip_code: str | None = Field(default=None, description="e.g. '91436'")
+    country: str = Field(default="us", description="ISO country code for postcode lookup")
+    latitude: float | None = Field(default=None, description="use instead of a postcode")
+    longitude: float | None = Field(default=None)
+
+
 class Config(BaseModel):
     bacnet: BacnetConfig
     devices: list[DeviceConfig]
@@ -87,6 +103,7 @@ class Config(BaseModel):
         default=30.0, ge=1.0, description="resync once a device clock is this far out"
     )
     reconcile_interval_seconds: float = Field(default=300.0, ge=10.0)
+    outdoor_weather: OutdoorWeatherConfig = Field(default_factory=OutdoorWeatherConfig)
     outdoor_sensor_device_id: int | None = Field(
         default=None,
         description="device with a physical outdoor sensor. Its reading is shared to every "

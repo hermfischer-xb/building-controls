@@ -12,7 +12,10 @@ import datetime as dt
 from typing import Any
 
 from ..holidays import describe, occurrences
-from ..points import SETPOINT_LIMITS, OccupancyState, ScheduleState, TempMode
+from ..points import (
+    SETPOINT_LIMITS, OccupancyState, ScheduleState, TempMode,
+    is_valid as is_valid_reading,
+)
 from ..schedules import DAYS, week_summary
 from .layout import activity, chip, e, icon, num, page
 
@@ -58,7 +61,8 @@ def _status_chip(device: dict) -> str:
 # --- dashboard ---------------------------------------------------------------
 
 
-def dashboard(user, devices: list[dict], reconcile: dict | None) -> str:
+def dashboard(user, devices: list[dict], reconcile: dict | None,
+              outdoor: dict | None = None) -> str:
     if not devices:
         body = '<h1>Dashboard</h1><p class="empty">No devices visible for your account.</p>'
         return page("Dashboard", user, body, active="/")
@@ -109,9 +113,23 @@ def dashboard(user, devices: list[dict], reconcile: dict | None) -> str:
         if parts:
             drift_note = f'<p class="sub">{e(" · ".join(parts))} · <a href="/ui/system">System</a></p>'
 
+    # Outdoor conditions are building-wide, so they belong beside the summary
+    # rather than repeated down a column.
+    outdoor_card = ""
+    if outdoor:
+        hum = outdoor.get("humidity_pct")
+        outdoor_card = f"""
+<div class="card" style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap">
+ <span class="sub">Outdoor</span>
+ <span class="big" style="font-size:1.6rem">{outdoor['temperature_f']:.0f}°F</span>
+ {f'<span class="sub">{hum:.0f}% RH</span>' if hum is not None else ''}
+ <span class="sub" style="margin-left:auto">{e(outdoor.get('source',''))}</span>
+</div>"""
+
     body = f"""
 <h1>Dashboard</h1>
 <p class="lede">{online} of {len(devices)} device(s) responding.</p>
+{outdoor_card}
 {banner}
 <div class="card"><div class="wrap"><table>
  <tr><th>Device</th><th>Status</th><th class="num">Space</th>
@@ -135,11 +153,26 @@ setTimeout(() => location.reload(), 15000);
 def device_detail(
     user, device: dict, groups: list[dict], group_id: int | None,
     overrides: dict[int, list[dict]], weekly: dict[str, list[dict]] | None,
-    known_zones: list[str] | None = None,
+    known_zones: list[str] | None = None, outdoor: dict | None = None,
 ) -> str:
     v = device.get("values", {})
     is_manager = user.at_least("manager")
     did = device["device_id"]
+
+    # Prefer what this thermostat itself holds -- that is what its own control
+    # logic uses. Fall back to the gateway's reading if it has not received one.
+    own_oa = v.get("oa_temp")
+    if is_valid_reading(own_oa):
+        outdoor_line = (
+            f'<div class="sub">outdoor {float(own_oa):.0f}°F</div>'
+        )
+    elif outdoor:
+        outdoor_line = (
+            f'<div class="sub">outdoor {outdoor["temperature_f"]:.0f}°F '
+            f'<span title="not yet written to this device">(gateway)</span></div>'
+        )
+    else:
+        outdoor_line = '<div class="sub">outdoor —</div>' 
 
     setpoint_rows = ""
     if is_manager:
@@ -283,6 +316,7 @@ function saveZone(id){{
   <div class="sub">Space temperature</div>
   <div class="big">{num(v.get('space_temp'), '°F')}</div>
   <div class="sub">humidity {num(v.get('space_humidity'), '%')}</div>
+  {outdoor_line}
  </div>
  <div class="card">
   <div class="sub">Effective</div>
