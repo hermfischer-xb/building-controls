@@ -175,6 +175,37 @@ Then open <http://127.0.0.1:8237/>.
 
 ---
 
+## The web interface
+
+Server-rendered pages with small islands of vanilla JavaScript — no build step,
+no `node_modules`, nothing to bundle or deploy. For a handful of screens over 25
+devices that would be more machinery than the problem needs, on a host expected
+to run unattended.
+
+| Page | Who | What |
+|---|---|---|
+| `/` | everyone | Dashboard: every visible device, temperatures, what the equipment is doing, outdoor conditions |
+| `/ui/devices/{id}` | everyone | Setpoints, override, bypass, live weekly schedule, zone |
+| `/ui/zones` | manager | Device-to-zone mapping and tenant access |
+| `/ui/schedules` | manager | Schedule groups and device assignment |
+| `/ui/holidays` | manager | Holiday rules, dated one-offs, work-through |
+| `/ui/system` | manager | Reconcile status, clock drift, audit log |
+| `/ui/users` | admin | Accounts and zone grants |
+| `/t/{id}` | everyone | The mobile tenant page (below) |
+| `/docs` | everyone | Interactive API explorer |
+
+Pages read from the poll cache in process, but every *mutation* goes back through
+the JSON API from the browser. Authorisation therefore lives in exactly one place
+and the interface cannot grant something the API refuses; the role filtering in
+the navigation only avoids dead ends.
+
+The dashboard shows what each unit is actually doing, driven by **active stage
+counts** rather than by the selected mode — a unit sitting in HEAT with nothing
+energised is idle, and showing a flame for it would make every row look busy:
+
+❄ cooling · 🔥 heating (and `aux` for backup heat) · 🍃 economizer · 💨 fan, which
+spins while running and respects `prefers-reduced-motion`.
+
 ## Roles
 
 | | tenant | manager | admin |
@@ -203,8 +234,10 @@ The one screen a tenant needs, designed for a phone held one-handed:
 
 - Fixed duration buttons (1–4 hours), 56 px minimum touch targets. Nobody types
   "180" in a car park.
-- Status in words — "Running now — 2h 47m left" — read from the device's own
-  countdown, not from what we last asked for.
+- Status in words — "Running now — about 2h" — read back from the device, not
+  from what we last asked for. Stated as a period rather than a countdown
+  because `no_BypassRemTime` reports the configured duration and was not
+  observed decrementing.
 - Self-contained: no framework, no external assets, loads instantly on cellular.
 - A failed write never claims failure, because it may still have been applied.
 
@@ -238,6 +271,82 @@ curl -X POST localhost:8237/reconcile                   # push to devices now
 
 The reconciler also runs every 5 minutes and is idempotent — it reports
 `already_correct` and writes nothing when devices match intent.
+
+## Zones
+
+A zone groups thermostats for tenant access and for zone-scoped holidays.
+
+**Config seeds a zone; the database owns it.** The split follows what changes and
+who changes it — a device's BACnet id, address and MAC are facts about hardware,
+but a zone changes when a tenant takes a different suite, and that is an
+operational act a manager should perform at 4pm on a Friday rather than a YAML
+edit and a restart. `/ui/zones` shows the mapping and moves devices between
+zones; the change takes effect immediately for both access and scheduling.
+
+A device has **exactly one zone by construction**: the override table is keyed on
+device id so it can hold at most one, and a device without an override falls back
+to the zone it was commissioned into.
+
+Tenant grants are checkboxes of zones that exist, and the API validates
+independently — a typo like `floor3` for `floor-3` is refused rather than
+silently granting access to nothing.
+
+## Holidays
+
+Stored as **rules**, not dates, and scoped three ways:
+
+| Scope | Example |
+|---|---|
+| `global` | The building closes on Christmas Day |
+| `zone` | One tenant's company observes Good Friday |
+| `device` | A single suite, for one-off cases |
+
+Floating rules (`weekNDay`) are evaluated *by the thermostat*, so "4th Thursday
+of November" is entered once and never refreshed.
+
+When a tenant says they are working through a holiday, the **"Working…"** action
+on that holiday creates a dated, zone-scoped exception which the device applies
+*over* the holiday, leaving it intact for everyone else. Verified on hardware:
+with a global holiday in force the device sat Unoccupied at 55/85, and the zone
+exception moved it to Occupied at 68/76.
+
+## Outdoor air
+
+Only one thermostat needs a physical outdoor sensor. **The thermostats cannot
+share it between themselves** — no COV, and they never originate reads, so there
+is no mechanism by which one could push to another. `ni_OutdoorTemp` is a
+writable input backed by a 600 second watchdog (`Cfg_NetOATFailDetDly`), and a
+device fed by peers would not need one.
+
+So the gateway reads the sensor and writes it to the rest:
+
+```
+Room 301 (sensor) ──read──> gateway ──write ni_OutdoorTemp──> every other room
+```
+
+All traffic stays server-to-device, so **wireless client isolation can remain
+enabled** and no thermostat-to-thermostat access is required.
+
+```yaml
+outdoor_sensor_device_id: 301     # null until a sensor is fitted
+outdoor_weather:                  # fallback, and cover before one is installed
+  enabled: true
+  zip_code: "91436"
+```
+
+Selecting BACnet/IP disables the thermostat's own internet path and an isolated
+VLAN removes it entirely, so the zip-code outdoor temperature it would otherwise
+display is gone — but the gateway is dual-homed and has internet, so it supplies
+the same value through the same input. Open-Meteo needs no API key.
+
+Precedence is **sensor first, weather second**: a physical sensor is the actual
+air at this building and is what economizer decisions are made from, while a
+failed sensor should cost accuracy rather than the whole signal. Every weather
+failure is non-fatal — a service outage must never stall a reconcile.
+
+> `65535` is the device's "no value" sentinel, not a temperature. Sharing it
+> would set a 65,535°F outdoor temperature on every other unit, so an invalid
+> reading is dropped rather than propagated.
 
 ## Clock sync
 
@@ -276,9 +385,15 @@ bms/
   schedules.py    group + override resolution, BACnet conversion
   holidays.py     fixed / range / floating rules -> calendar entries
   reconciler.py   pushes intent onto devices, detects drift
+  zones.py        resolves a device's zone: config seeds it, the database owns it
+  weather.py      public outdoor conditions, key-free, every failure non-fatal
   auth.py         scrypt passwords, server-side sessions, role checks
   api.py          HTTP surface
-  tenant_page.py  the mobile bypass page
+  ui/
+    layout.py     shared shell, CSS, activity icons, escaping
+    pages.py      dashboard, device, zones, schedules, holidays, system, users
+    routes.py     page routes; render only, mutations go via the JSON API
+  tenant_page.py  the mobile bypass page and the login form
   useradmin.py    CLI for bootstrapping and recovery
 tools/
   discover.py     dump every object on a device to JSON (commissioning aid)
@@ -286,6 +401,7 @@ tools/
   write_test.py   which points accept writes; records, writes, reverts, verifies
   sim_tc500a.py   virtual TC500A, for developing with no hardware
   test_roles.py   authorisation matrix
+  test_proxy.py   login throttle keys on the real client, not the proxy
 ```
 
 ## Developing without hardware
@@ -328,8 +444,31 @@ boundary does that.
 
 The gateway then sits dual-homed: one interface on the control VLAN (pinned via
 `bacnet.address`), one on the normal LAN. Do not bind this application to a
-public interface — it refuses `0.0.0.0` on startup. Reach it over Tailscale or
-WireGuard, and set `secure_cookies: true` once it is served over HTTPS.
+public interface — it refuses `0.0.0.0` on startup.
+
+**Remote access.** Tenants will not install a VPN client, so anything they use
+needs a publicly trusted certificate. An outbound-only tunnel (Cloudflare Tunnel
+or similar) suits this topology better than opening a port: the gateway bridges
+to equipment that has no authentication of its own, so there should be nothing
+inbound to attack. Once TLS terminates in front:
+
+```yaml
+secure_cookies: true                  # AFTER https works, never before
+behind_proxy: true                    # only then is the client-IP header trusted
+client_ip_header: cf-connecting-ip    # or x-forwarded-for
+```
+
+Set `secure_cookies` *after* HTTPS is working. Enabled on plain HTTP, the browser
+accepts the cookie and never sends it back, so login appears to succeed and
+silently does not stick.
+
+`behind_proxy` matters more than it looks. Behind a proxy every request arrives
+from `127.0.0.1`, so a login throttle keyed on that would put every failed login
+in one bucket and let eight bad passwords lock out the whole building. The
+client-IP header is trusted *only* when this is set — believing it
+unconditionally would be worse than not having it, since a direct caller could
+forge a fresh address per attempt and never be throttled. `tools/test_proxy.py`
+asserts both directions.
 
 An isolated VLAN needs no internet: clock sync comes from the gateway over
 BACnet, and firmware is applied at commissioning time before the device moves
@@ -362,8 +501,9 @@ layers become device-agnostic. Everything below depends on it.
       partner fee
 - [ ] **Badge-driven comfort**: first badge-in on a weekend starts that suite's
       HVAC and lights; last badge-out plus a timeout releases them
-- [ ] An operator UI for managers (currently API and `/docs` only)
 - [ ] Delayed-start pre-cooling ("be cool by 2pm" rather than "start now")
+- [ ] A devices page — adding or re-addressing a thermostat is still a config
+      edit and a restart, which is defensible for hardware but not for much else
 - [ ] Per-holiday occupancy states on one device (the device has ten calendar
       objects; only one is currently used)
 

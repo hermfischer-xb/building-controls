@@ -20,6 +20,8 @@ a few hours of conditioning, not a floor left running all weekend.
 
 from __future__ import annotations
 
+from .ui.layout import FAVICON
+
 # Offered durations. Kept short and legible; the device caps at 1080 minutes but
 # a tenant popping in on a weekend does not need an 18-hour option.
 DURATIONS = ((60, "1 hour"), (120, "2 hours"), (180, "3 hours"), (240, "4 hours"))
@@ -32,6 +34,7 @@ def render_login(error: str = "", next_url: str = "/") -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Sign in</title>
+<link rel="icon" href="{FAVICON}">
 <style>
  *{{box-sizing:border-box}}
  body{{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
@@ -102,6 +105,7 @@ def render(device_id: int, name: str, state: dict) -> str:
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#111">
 <title>{name} — comfort</title>
+<link rel="icon" href="{FAVICON}">
 <style>
  *{{box-sizing:border-box}}
  body{{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;

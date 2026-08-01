@@ -229,6 +229,21 @@ def activity(values: dict) -> str:
     return "".join(out)
 
 
+# A data URI rather than a served file, so the pages stay self-contained and a
+# favicon request can never 404 into the logs or block on the network. Drawn as a
+# thermostat dial: recognisable at 16px, and distinct enough that an operator with
+# several tabs open can find this one.
+FAVICON = (
+    "data:image/svg+xml,"
+    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E"
+    "%3Crect width='32' height='32' rx='7' fill='%231a73e8'/%3E"
+    "%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='white' stroke-width='2.5'"
+    " stroke-dasharray='42 100' transform='rotate(140 16 16)'/%3E"
+    "%3Ccircle cx='16' cy='16' r='3.2' fill='white'/%3E"
+    "%3C/svg%3E"
+)
+
+
 def page(title: str, user: Any, body: str, active: str = "") -> str:
     """Wrap page content in the shared shell.
 
@@ -249,6 +264,7 @@ def page(title: str, user: Any, body: str, active: str = "") -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{e(title)} · building-controls</title>
+<link rel="icon" href="{FAVICON}">
 <style>{CSS}{ICON_CSS}</style>
 <header><div class="bar">
   <span class="brand">building-controls</span>
