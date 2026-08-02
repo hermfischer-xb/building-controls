@@ -39,7 +39,8 @@ def render_login(error: str = "", next_url: str = "/") -> str:
 <style>
  *{{box-sizing:border-box}}
  body{{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      margin:0;padding:env(safe-area-inset-top) 1.25rem 2rem;max-width:26rem;
+      margin:0;padding:env(safe-area-inset-top) max(1.25rem,env(safe-area-inset-right))
+            max(2rem,env(safe-area-inset-bottom)) max(1.25rem,env(safe-area-inset-left));max-width:26rem;
       margin-inline:auto;background:#fff;color:#111}}
  h1{{font-size:1.35rem;margin:2rem 0 1.5rem}}
  label{{display:block;font-size:.9rem;color:#555;margin:0 0 .35rem}}
@@ -111,7 +112,8 @@ def render(device_id: int, name: str, state: dict) -> str:
 <style>
  *{{box-sizing:border-box}}
  body{{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      margin:0;padding:env(safe-area-inset-top) 1.25rem 2rem;max-width:30rem;
+      margin:0;padding:env(safe-area-inset-top) max(1.25rem,env(safe-area-inset-right))
+            max(2rem,env(safe-area-inset-bottom)) max(1.25rem,env(safe-area-inset-left));max-width:30rem;
       margin-inline:auto;background:#fff;color:#111}}
  h1{{font-size:1.35rem;margin:1.5rem 0 .25rem}}
  .sub{{color:#666;margin:0 0 1.5rem}}

@@ -36,15 +36,19 @@ body{font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
      margin:0;background:var(--bg);color:var(--fg)}
 a{color:var(--accent)}
 header{border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
-.bar{max-width:64rem;margin:0 auto;padding:.75rem 1.25rem;display:flex;
-     align-items:center;gap:1.25rem;flex-wrap:wrap}
+.bar{max-width:64rem;margin:0 auto;display:flex;align-items:center;gap:1.25rem;
+     flex-wrap:wrap;
+     padding:.75rem max(1.25rem,env(safe-area-inset-right)) .75rem
+                    max(1.25rem,env(safe-area-inset-left))}
 .brand{font-weight:700;letter-spacing:-.01em;margin-right:auto}
 nav{display:flex;gap:1rem;flex-wrap:wrap}
 nav a{text-decoration:none;color:var(--muted);padding:.2rem 0;border-bottom:2px solid transparent}
 nav a:hover{color:var(--fg)}
 nav a.on{color:var(--fg);border-bottom-color:var(--accent)}
 .who{color:var(--muted);font-size:.85rem}
-main{max-width:64rem;margin:0 auto;padding:1.5rem 1.25rem 4rem}
+main{max-width:64rem;margin:0 auto;
+     padding:1.5rem max(1.25rem,env(safe-area-inset-right))
+             max(4rem,env(safe-area-inset-bottom)) max(1.25rem,env(safe-area-inset-left))}
 h1{font-size:1.5rem;margin:.5rem 0 .25rem}
 h2{font-size:1.05rem;margin:2rem 0 .75rem}
 .lede{color:var(--muted);margin:0 0 1.5rem}
@@ -77,7 +81,8 @@ label{font-size:.85rem;color:var(--muted);display:block;margin-bottom:.25rem}
 .big{font-size:2rem;font-weight:650;line-height:1.1;font-variant-numeric:tabular-nums}
 .sub{color:var(--muted);font-size:.85rem}
 .empty{color:var(--muted);padding:1.5rem 0;text-align:center}
-#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:1.5rem;z-index:50;
+#toast{position:fixed;left:50%;transform:translateX(-50%);
+       bottom:max(1.5rem,calc(env(safe-area-inset-bottom) + .5rem));z-index:50;
        padding:.7rem 1.1rem;border-radius:12px;display:none;font-size:.92rem;
        box-shadow:0 4px 18px #0003;max-width:90vw}
 #toast.ok{display:block;background:var(--ok);color:#fff}
@@ -262,7 +267,7 @@ def page(title: str, user: Any, body: str, active: str = "") -> str:
     )
     return f"""<!doctype html>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
 <title>{e(title)} · building-controls</title>
 <link rel="icon" href="{FAVICON}">
