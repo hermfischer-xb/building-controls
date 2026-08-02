@@ -33,6 +33,7 @@ def render_login(error: str = "", next_url: str = "/") -> str:
     return f"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
 <title>Sign in</title>
 <link rel="icon" href="{FAVICON}">
 <style>
@@ -103,6 +104,7 @@ def render(device_id: int, name: str, state: dict) -> str:
     return f"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
 <meta name="theme-color" content="#111">
 <title>{name} — comfort</title>
 <link rel="icon" href="{FAVICON}">

@@ -263,6 +263,7 @@ def page(title: str, user: Any, body: str, active: str = "") -> str:
     return f"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
 <title>{e(title)} · building-controls</title>
 <link rel="icon" href="{FAVICON}">
 <style>{CSS}{ICON_CSS}</style>

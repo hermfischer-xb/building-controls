@@ -17,7 +17,9 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse,
+)
 from pydantic import BaseModel, Field
 
 from .auth import COOKIE_NAME, SESSION_TTL_SECONDS, AuthStore, LoginThrottle, User
@@ -294,6 +296,21 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             device.name,
             state.to_dict(cfg.poll_interval_seconds * 3) if state else {},
         ))
+
+    @app.get("/robots.txt", include_in_schema=False)
+    async def robots() -> PlainTextResponse:
+        """Refuse every crawler, at the origin.
+
+        Cloudflare can block AI and search bots at the edge, but this states it
+        independently: a well-behaved crawler that reaches the origin by any
+        other route still gets told no, and it keeps the policy with the
+        application rather than in a dashboard someone has to remember.
+
+        Not a security control -- everything here needs a session anyway, so a
+        crawler only ever sees the login page. This is about not having a
+        building's control system turn up in search results.
+        """
+        return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
