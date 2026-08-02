@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchDaemon for the building-controls gateway.
+
+  A Daemon, not an Agent: agents only start once a user logs in, so after an
+  unattended reboot the building would have no controller until someone sat down
+  at the machine. Daemons start at boot with no session.
+
+  Install:
+    sudo cp deploy/com.building-controls.gateway.plist /Library/LaunchDaemons/
+    sudo chown root:wheel /Library/LaunchDaemons/com.building-controls.gateway.plist
+    sudo chmod 644       /Library/LaunchDaemons/com.building-controls.gateway.plist
+    sudo launchctl load -w /Library/LaunchDaemons/com.building-controls.gateway.plist
+
+  Check / stop:
+    sudo launchctl list | grep building-controls
+    sudo launchctl unload -w /Library/LaunchDaemons/com.building-controls.gateway.plist
+
+  Edit the four paths below to match the machine. They must be absolute --
+  launchd has no shell, no PATH, and no notion of your home directory.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.building-controls.gateway</string>
+
+    <!-- The venv interpreter directly. There is no shell to activate it. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/CHANGEME/building-controls/.venv/bin/python</string>
+        <string>-m</string>
+        <string>bms</string>
+        <string>--config</string>
+        <string>config/devices.yaml</string>
+    </array>
+
+    <!-- The config path above is relative, so this has to be the repo root. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/CHANGEME/building-controls</string>
+
+    <!--
+      Runs as a normal user, not root. Nothing here needs privilege: BACnet uses
+      UDP 47808, the API binds 8237, and both are above 1024. A process that
+      talks to unauthenticated field devices should not also be root.
+    -->
+    <key>UserName</key>
+    <string>CHANGEME</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it exits for any reason. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!--
+      Give the network time to come up after a reboot. Without this the first
+      start can land before the interface has an address, and binding a specific
+      interface then fails.
+    -->
+    <key>ThrottleInterval</key>
+    <integer>20</integer>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/building-controls.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/building-controls.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Unbuffered, or log lines sit in a pipe and the log looks dead. -->
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>

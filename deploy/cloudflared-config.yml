@@ -1,0 +1,44 @@
+# Cloudflare Tunnel ingress for the building.
+#
+# Install at /etc/cloudflared/config.yml (system-wide, so the tunnel runs as a
+# LaunchDaemon and survives reboot), or ~/.cloudflared/config.yml for testing.
+#
+# The tunnel dials outbound to Cloudflare, so there is no inbound port and
+# nothing to open on the firewall. That matters here more than usual: this host
+# is dual-homed onto a control network full of devices with no authentication of
+# their own, so it should not be listening on the internet at all.
+#
+#   cloudflared tunnel login
+#   cloudflared tunnel create building-controls
+#   cloudflared tunnel route dns building-controls controls.16400ventura.com
+#   cloudflared tunnel route dns building-controls truportal.16400ventura.com
+#   sudo cloudflared service install        # LaunchDaemon, starts at boot
+#
+# Verify with:  cloudflared tunnel info building-controls
+
+tunnel: building-controls
+credentials-file: /etc/cloudflared/building-controls.json
+
+# Keep the connection healthy through NAT idle timeouts.
+keep-alive-connections: 4
+keep-alive-timeout: 90s
+
+ingress:
+  # --- the building controls app -------------------------------------------
+  # It binds 127.0.0.1 only, so the tunnel is the sole way in. Do not change
+  # api_host to 0.0.0.0 to "make this work" -- the app refuses that on purpose.
+  - hostname: controls.16400ventura.com
+    service: http://127.0.0.1:8237
+
+  # --- TruPortal, so it can come off its public IP --------------------------
+  # An access control appliance with no vendor since 2020 should not be exposed
+  # directly. Point this at its LAN address and then remove the public mapping.
+  # noTLSVerify because it carries a self-signed certificate and, with Interlogix
+  # gone, there is no path to a trusted one.
+  - hostname: truportal.16400ventura.com
+    service: https://CHANGEME-TRUPORTAL-LAN-IP
+    originRequest:
+      noTLSVerify: true
+
+  # Required catch-all: anything else gets refused rather than proxied.
+  - service: http_status:404
