@@ -16,7 +16,10 @@
 #
 # Verify with:  cloudflared tunnel info building-controls
 
-tunnel: building-controls
+# The tunnel UUID, not the name. Resolving a name needs the origin certificate
+# in ~/.cloudflared, and this runs as root at boot, whose home is /var/root.
+# `cloudflared tunnel create` prints the UUID; `cloudflared tunnel list` repeats it.
+tunnel: CHANGEME-TUNNEL-UUID
 credentials-file: /etc/cloudflared/building-controls.json
 
 # Keep the connection healthy through NAT idle timeouts.

@@ -209,22 +209,70 @@ cloudflared tunnel create building-controls
 cloudflared tunnel route dns building-controls controls.16400ventura.com
 ```
 
+`tunnel login` opens a browser and then polls for about eight minutes before
+giving up with `Failed to write the certificate` — harmless, nothing is written,
+just run it again. It also requires a **verified account email**; if the
+authorize page refuses, verify at Cloudflare's My Profile → Email Address →
+*Send verification email*, then restart the login, since the callback token will
+have expired in the meantime.
+
+`tunnel create` writes `~/.cloudflared/<UUID>.json`. Note the UUID — the config
+below wants it.
+
 Put `deploy/cloudflared-config.yml` at `/etc/cloudflared/config.yml` and edit the
 TruPortal LAN address — **or, if TruPortal is deferred, comment that whole
 ingress block out.** cloudflared validates ingress at startup and will not come
 up with `CHANGEME-TRUPORTAL-LAN-IP` in the file. Skip its `tunnel route dns`
 line too, so the hostname does not exist until there is something behind it;
-steps 4 and 7 then cover `controls.16400ventura.com` only. Then:
+steps 4 and 7 then cover `controls.16400ventura.com` only.
+
+Install the credentials root-only — they authenticate the tunnel, so treat them
+like a private key:
 
 ```bash
+sudo mkdir -p /etc/cloudflared
+sudo cp ~/.cloudflared/<UUID>.json /etc/cloudflared/building-controls.json
+sudo chown root:wheel /etc/cloudflared/building-controls.json
+sudo chmod 600       /etc/cloudflared/building-controls.json
+sudo cp deploy/cloudflared-config.yml /etc/cloudflared/config.yml
+
+cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
 sudo cloudflared service install
-cloudflared tunnel info building-controls
+```
+
+**`service install` writes a plist that does not run the tunnel.** It builds
+`ProgramArguments` from `~/.cloudflared/config.yml`; with the config in `/etc`
+instead, it emits the bare binary path with no subcommand, which prints usage and
+exits. The daemon then respawns forever, `tunnel info` reports no connections,
+and the only clue is `use 'cloudflared tunnel run' to start tunnel …` in
+`/Library/Logs/com.cloudflare.cloudflared.err.log`.
+
+Fix `/Library/LaunchDaemons/com.cloudflare.cloudflared.plist` so
+`ProgramArguments` reads:
+
+```xml
+<string>/usr/local/bin/cloudflared</string>
+<string>--config</string>
+<string>/etc/cloudflared/config.yml</string>
+<string>tunnel</string>
+<string>run</string>
+```
+
+Set `KeepAlive` to `true` while you are in there. The installer's default only
+restarts on a *failing* exit, which would leave the building with no remote
+access after any exit cloudflared considers clean. Then:
+
+```bash
+sudo launchctl bootout system/com.cloudflare.cloudflared
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.cloudflare.cloudflared.plist
+cloudflared tunnel info building-controls        # want a connector and its edge locations
 ```
 
 Outbound only — no inbound port, no firewall change, and the public IP stops
 being an attack surface.
 
-Test <https://controls.16400ventura.com> before continuing.
+Test <https://controls.16400ventura.com> before continuing. `/` should redirect
+to `/login`, and `/health` should answer with your device count.
 
 ---
 
