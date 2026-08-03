@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Nightly backup of the database, the config and the plist.
+
+  StartCalendarInterval rather than StartInterval: launchd runs a missed
+  calendar job once the machine wakes, so a mini that was asleep at 03:15 still
+  gets its backup. A repeating interval would simply have skipped the night.
+
+  Install:
+    sudo cp deploy/com.building-controls.backup.plist /Library/LaunchDaemons/
+    sudo chown root:wheel /Library/LaunchDaemons/com.building-controls.backup.plist
+    sudo chmod 644        /Library/LaunchDaemons/com.building-controls.backup.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.backup.plist
+
+  Run it now, without waiting for 03:15:
+    sudo launchctl kickstart -k system/com.building-controls.backup
+
+  Check it ran:
+    tail /usr/local/var/log/building-controls-backup.log
+
+  Edit the two CHANGEME paths. launchd has no shell, no PATH and no home
+  directory, so both must be absolute.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.building-controls.backup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/CHANGEME/building-controls/deploy/backup.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/CHANGEME/building-controls</string>
+
+    <!--
+      Same account as the gateway. Running the backup as root would write files
+      the ordinary account cannot read, and a backup you need sudo to look at is
+      one you will not check.
+    -->
+    <key>UserName</key>
+    <string>CHANGEME</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>15</integer>
+    </dict>
+
+    <!-- A backup job must not be restarted forever if it fails. -->
+    <key>KeepAlive</key>
+    <false/>
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/building-controls-backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/building-controls-backup.log</string>
+</dict>
+</plist>

@@ -1,0 +1,5 @@
+username,display_name,role,zones,password
+suite201,Ventura Law Group,tenant,floor-2,
+suite205,Bright Dental,tenant,floor-2,
+suite301,Copperfield CPA,tenant,floor-3,
+bldgmgr,Building Manager,manager,,

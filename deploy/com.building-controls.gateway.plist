@@ -10,11 +10,16 @@
     sudo cp deploy/com.building-controls.gateway.plist /Library/LaunchDaemons/
     sudo chown root:wheel /Library/LaunchDaemons/com.building-controls.gateway.plist
     sudo chmod 644       /Library/LaunchDaemons/com.building-controls.gateway.plist
-    sudo launchctl load -w /Library/LaunchDaemons/com.building-controls.gateway.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.gateway.plist
 
-  Check / stop:
-    sudo launchctl list | grep building-controls
-    sudo launchctl unload -w /Library/LaunchDaemons/com.building-controls.gateway.plist
+  `load -w` also appears to work and is what most guides still say, but it is
+  deprecated and reports success while doing nothing useful on current macOS.
+  Use bootstrap.
+
+  Check / restart / stop:
+    sudo launchctl print system/com.building-controls.gateway
+    sudo launchctl kickstart -k system/com.building-controls.gateway
+    sudo launchctl bootout system/com.building-controls.gateway
 
   Edit the four paths below to match the machine. They must be absolute --
   launchd has no shell, no PATH, and no notion of your home directory.

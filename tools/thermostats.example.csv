@@ -1,0 +1,5 @@
+device_id,address,name,zone,mac
+201,192.168.1.101,Suite 201,floor-2,00:11:22:33:44:55
+205,192.168.1.105,Suite 205,floor-2,
+301,192.168.1.201,Suite 301,floor-3,
+326,192.168.1.226,Suite 326,floor-3,

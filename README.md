@@ -127,8 +127,10 @@ devices:
     zone: floor-3             # tenants are granted access by zone
 ```
 
-> Always pin `bacnet.address`. A host with two NICs on one subnet will otherwise
-> bind ambiguously and Who-Is can leave by the wrong interface.
+> Always pin `bacnet.address`. On a host with more than one interface — an office
+> LAN plus a second adapter on the thermostat subnet is the usual arrangement —
+> bacpypes3 otherwise binds whichever it picks, and broadcasts leave by the wrong
+> one.
 
 ## Commissioning a thermostat
 
@@ -172,6 +174,56 @@ port (47808) → DHCP or static. Requires the installer passcode.
 ```
 
 Then open <http://127.0.0.1:8237/>.
+
+## Commissioning a building, not a thermostat
+
+Twenty-five thermostats and their tenants are too many to hand-type without
+transposing a digit, and a transposed digit is a device that silently never
+answers. Both loaders validate the whole file before writing anything.
+
+```bash
+# Devices -> the `devices:` block for config/devices.yaml
+.venv/bin/python tools/devices_from_csv.py thermostats.csv
+```
+
+Columns `device_id, address, name, zone, mac`. Rejects duplicate ids, duplicate
+addresses, malformed IPs, and `4194302` — the unconfigured default, which two
+units would report simultaneously. It prints rather than editing
+`config/devices.yaml`, because that file is mostly comments recording traps that
+cost real time to find and every YAML library here drops them on a round trip.
+
+```bash
+# Accounts -> the database
+.venv/bin/python -m bms.useradmin import-csv tenants.csv --dry-run
+.venv/bin/python -m bms.useradmin import-csv tenants.csv --passwords pw.csv
+```
+
+Columns `username, display_name, role, zones, password`; only `username` is
+required. Blank password means one is generated. Re-running skips accounts that
+already exist. `--passwords` writes a file created mode 600, not chmod'ed
+afterwards, so there is no window in which it is readable.
+
+Given `--config`, it warns when a tenant's zone matches no device — the failure
+that otherwise presents as a working login onto an empty page. See
+`tools/thermostats.example.csv` and `tools/tenants.example.csv`.
+
+## Backups
+
+```bash
+deploy/backup.sh                    # -> /usr/local/var/backups/building-controls
+```
+
+Database, config, plist, and the git SHA that was running; 30 kept; restore
+instructions written into every backup directory. Install
+`deploy/com.building-controls.backup.plist` to run it nightly.
+
+**The gateway does not need to be stopped**, because it uses `sqlite3 .backup`
+rather than copying the file. That distinction is not cosmetic: measured against
+a live gateway-style connection, a plain `cp` of `bms.db` produced a file in
+which `app_user` did not exist as a table, because 292 KB of committed data was
+still in `bms.db-wal` awaiting a checkpoint. Each run then verifies its own
+output with `PRAGMA integrity_check` and a non-zero account count, so a run that
+reports success has been checked rather than assumed.
 
 ---
 
@@ -394,7 +446,10 @@ bms/
     pages.py      dashboard, device, zones, schedules, holidays, system, users
     routes.py     page routes; render only, mutations go via the JSON API
   tenant_page.py  the mobile bypass page and the login form
-  useradmin.py    CLI for bootstrapping and recovery
+  passkeys.py     WebAuthn registration and step-up verification
+  passkey_js.py   the browser half, shared by both interfaces
+  truportal.py    async SOAP driver for the access panel: doors and lighting
+  useradmin.py    CLI for bootstrapping, recovery and bulk import
 tools/
   discover.py     dump every object on a device to JSON (commissioning aid)
   probe.py        read-only check of the points the app depends on
@@ -402,6 +457,13 @@ tools/
   sim_tc500a.py   virtual TC500A, for developing with no hardware
   test_roles.py   authorisation matrix
   test_proxy.py   login throttle keys on the real client, not the proxy
+  test_passkeys.py  passkey security properties, against a software authenticator
+  devices_from_csv.py  a spreadsheet of thermostats -> the devices: block
+  truportal_soap.py    raw SOAP calls, for exploring the panel
+deploy/
+  DEPLOY.md       the macOS traps, in the order they bite
+  backup.sh       consistent snapshot of database + config; verifies its output
+  *.plist         LaunchDaemons for the gateway and the nightly backup
 ```
 
 ## Developing without hardware
