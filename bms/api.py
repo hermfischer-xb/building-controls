@@ -403,6 +403,8 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             device_id,
             device.name,
             state.to_dict(cfg.poll_interval_seconds * 3) if state else {},
+            passkeys_available=passkeys.configured,
+            has_passkey=passkeys.has_passkey(user.id) if passkeys.configured else False,
         ))
 
     @app.get("/robots.txt", include_in_schema=False)

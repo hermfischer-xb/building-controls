@@ -70,7 +70,8 @@ def render_login(error: str = "", next_url: str = "/") -> str:
 """
 
 
-def render(device_id: int, name: str, state: dict) -> str:
+def render(device_id: int, name: str, state: dict,
+           passkeys_available: bool = False, has_passkey: bool = False) -> str:
     values = state.get("values", {})
     online = state.get("online", False)
     stale = state.get("stale", True)
@@ -102,6 +103,20 @@ def render(device_id: int, name: str, state: dict) -> str:
         for minutes, label in DURATIONS
     )
 
+    # Enrolment lives on the operator UI, which a tenant has no other route to.
+    # Without a link from here the feature is unreachable for the people it is
+    # for -- and door unlock refuses until a device is registered, so the prompt
+    # has to appear before they ever meet that refusal.
+    if not passkeys_available:
+        footer = ""
+    elif has_passkey:
+        footer = ('<p class="foot"><a href="/ui/security">Manage your devices</a></p>')
+    else:
+        footer = (
+            '<p class="foot"><a href="/ui/security">Set up Face ID</a>'
+            ' — needed before you can open a door remotely.</p>'
+        )
+
     return f"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -129,6 +144,8 @@ def render(device_id: int, name: str, state: dict) -> str:
  button:active{{transform:scale(.97)}}
  button[disabled]{{opacity:.5}}
  .stop{{grid-column:1/-1;border-color:#f0c0bd;color:#c5221f;margin-top:.25rem}}
+ .foot{{margin-top:2rem;text-align:center;font-size:.9rem;color:#666}}
+ .foot a{{color:#1a73e8}}
  #msg{{margin-top:1rem;padding:.85rem 1rem;border-radius:12px;display:none;font-size:.95rem}}
  #msg.ok{{display:block;background:#e6f4ea;color:#137333}}
  #msg.err{{display:block;background:#fce8e6;color:#c5221f}}
@@ -139,6 +156,7 @@ def render(device_id: int, name: str, state: dict) -> str:
    .on .status{{color:#81c995}} .warn .status{{color:#f28b82}}
    .stop{{border-color:#5c2f2c;color:#f28b82}}
    #msg.ok{{background:#122b1a;color:#81c995}} #msg.err{{background:#2d1614;color:#f28b82}}
+   .foot{{color:#9a9aa2}} .foot a{{color:#8ab4f8}}
  }}
 </style>
 
@@ -157,6 +175,7 @@ def render(device_id: int, name: str, state: dict) -> str:
 </div>
 
 <p id="msg"></p>
+{footer}
 
 <script>
 const msg = document.getElementById('msg');
