@@ -296,7 +296,13 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     async def logout(request: Request):
         token = request.cookies.get(COOKIE_NAME)
         if token:
+            # Resolve before revoking, so the audit trail records who left. A log
+            # with login.ok and no matching logout cannot answer "was that session
+            # still open when the door was unlocked?".
+            user = auth.resolve_session(token)
             auth.revoke_session(token)
+            if user:
+                store.log(user.username, "logout", client_ip(request))
         response = RedirectResponse("/login", status_code=303)
         response.delete_cookie(COOKIE_NAME, path="/")
         return response

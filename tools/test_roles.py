@@ -20,6 +20,12 @@ import httpx
 
 BASE = os.environ.get("BMS_BASE_URL", "http://localhost:8237")
 
+# The device to exercise. Hardcoding one is how this ended up asserting against
+# device 301, which exists in no deployment -- it came from a worked example in
+# a config file comment. Discovered from the tenant's own visible devices unless
+# overridden, so the test follows the machine it runs on.
+DEVICE = os.environ.get("BMS_DEVICE")
+
 
 def _account(env_var: str, default_user: str) -> tuple[str, str]:
     """Read `user:password` from the environment.
@@ -45,13 +51,13 @@ ACCOUNTS = {
 # (label, method, path, json body, expected status per role)
 CHECKS = [
     ("GET  /devices", "GET", "/devices", None, {"admin": 200, "manager": 200, "tenant": 200}),
-    ("GET  /t/301 (own zone)", "GET", "/t/301", None,
+    ("GET  /t/{dev} (own zone)", "GET", "/t/{dev}", None,
      {"admin": 200, "manager": 200, "tenant": 200}),
-    ("POST bypass (self-expiring)", "POST", "/devices/301/bypass", {"minutes": 0},
+    ("POST bypass (self-expiring)", "POST", "/devices/{dev}/bypass", {"minutes": 0},
      {"admin": 200, "manager": 200, "tenant": 200}),
-    ("POST override (never expires)", "POST", "/devices/301/override",
+    ("POST override (never expires)", "POST", "/devices/{dev}/override",
      {"state": "NO_OVERRIDE"}, {"admin": 200, "manager": 200, "tenant": 403}),
-    ("POST setpoint write", "POST", "/devices/301/points/occ_cool_sp", {"value": 76},
+    ("POST setpoint write", "POST", "/devices/{dev}/points/occ_cool_sp", {"value": 76},
      {"admin": 200, "manager": 200, "tenant": 403}),
     ("GET  /holidays", "GET", "/holidays", None,
      {"admin": 200, "manager": 200, "tenant": 200}),
@@ -65,6 +71,19 @@ CHECKS = [
     ("GET  /reconcile status", "GET", "/reconcile", None,
      {"admin": 200, "manager": 200, "tenant": 403}),
 ]
+
+
+def discover_device(client: httpx.Client) -> str:
+    """The device the tenant can actually see, so assertions match reality."""
+    if DEVICE:
+        return DEVICE
+    devices = client.get("/devices").json()
+    if not devices:
+        raise SystemExit(
+            "the tenant account can see no devices; set BMS_DEVICE, or check the "
+            "account's zones match a device in config/devices.yaml"
+        )
+    return str(devices[0]["device_id"])
 
 
 def login(role: str) -> httpx.Client:
@@ -84,7 +103,7 @@ def main() -> int:
     for label, path, expected in [
         ("GET /devices", "/devices", 401),
         ("GET /users", "/users", 401),
-        ("GET /t/301", "/t/301", 303),
+        ("GET /t/{dev}", "/t/{dev}", 303),
     ]:
         got = anon.get(path).status_code
         ok = got == expected
@@ -97,11 +116,14 @@ def main() -> int:
     print(f"  {'ok ' if ok else 'FAIL'} {'bad password':20} {got} (want 401)")
 
     clients = {role: login(role) for role in ACCOUNTS}
+    device = discover_device(clients["tenant"])
+    print(f"\n(testing against device {device})")
 
     print("\n=== authorisation matrix ===")
     print(f"{'ACTION':32} {'admin':>7} {'manager':>9} {'tenant':>8}")
     print("-" * 60)
     for label, method, path, body, expected in CHECKS:
+        label, path = label.format(dev=device), path.format(dev=device)
         cells = []
         for role in ("admin", "manager", "tenant"):
             res = clients[role].request(method, path, json=body)
@@ -112,13 +134,17 @@ def main() -> int:
         print(f"{label:32} {cells[0]:>7} {cells[1]:>9} {cells[2]:>8}")
 
     print("\n=== tenant zone isolation ===")
-    # suite301 holds zone 'floor-3'; device 301 is in it. A device in another zone
-    # must be invisible, not merely forbidden.
+    # Whatever zones the tenant account holds, it must see devices from those and
+    # nothing else -- a device in another zone must be invisible, not merely
+    # forbidden. Compared against the account's own zones rather than a literal,
+    # so this holds on any deployment.
+    granted = set(clients["tenant"].get("/me").json()["zones"])
     visible = clients["tenant"].get("/devices").json()
     zones = {d["zone"] for d in visible}
-    ok = zones <= {"floor-3"}
+    ok = bool(granted) and zones <= granted
     failures += not ok
-    print(f"  {'ok ' if ok else 'FAIL'} tenant sees only {zones or '{}'} (want {{'floor-3'}})")
+    print(f"  {'ok ' if ok else 'FAIL'} tenant sees only {zones or '{}'} "
+          f"(granted {granted or '{}'})")
 
     res = clients["tenant"].get("/devices/9999")
     ok = res.status_code == 404
