@@ -166,6 +166,37 @@ mechanism is a backup restore, not an export tool — that is what `backup.sh` i
 
 ---
 
+## Open right now: the backup job wrote no log
+
+Herm installed the backup plist on the mini and
+`/usr/local/var/log/building-controls-backup.log` was not created.
+
+**That is not "it ran and said nothing".** `backup.sh` prints on every path,
+including failure. No log means the job never started, so do not go looking for a
+bug in the script first. Three causes, in order:
+
+```bash
+sudo launchctl print system/com.building-controls.backup   # "Could not find" = never bootstrapped
+grep CHANGEME /Library/LaunchDaemons/com.building-controls.backup.plist
+ls -ld /usr/local/var/log                                  # must be writable by UserName
+```
+
+Copying a plist does not install it, and `kickstart` on a service that was never
+bootstrapped fails without creating anything — that is the most likely answer.
+
+Prove the script itself works first, since it is the faster test and it is
+meaningful in the foreground (unlike the gateway, whose failure mode only exists
+under launchd):
+
+```bash
+deploy/backup.sh ~/backup-test && ls -R ~/backup-test
+```
+
+Note `/usr/local/var` is root-owned on a machine that never installed Homebrew,
+which alone is enough to stop the job. The install steps in DEPLOY.md now create
+and chown both directories first; the version Herm used did not say to, which is
+my omission, not his mistake.
+
 ## Still open, in priority order
 
 1. **Cloudflare dashboard.** Access on `/ui/*`, a rate-limit rule on `/login`,

@@ -31,12 +31,23 @@ DB="${BMS_DB:-$REPO/data/bms.db}"
 CONFIG="${BMS_CONFIG:-$REPO/config/devices.yaml}"
 PLIST="/Library/LaunchDaemons/com.building-controls.gateway.plist"
 
+fail() { echo "backup FAILED: $*" >&2; exit 1; }
+
 # The backup holds password hashes, a TruPortal password and the audit trail.
 # umask before mkdir, so the directory is never briefly world-readable.
 umask 077
-mkdir -p "$OUT"
 
-fail() { echo "backup FAILED: $*" >&2; exit 1; }
+# Checked rather than left to `set -e`, because the bare mkdir error ("Permission
+# denied") does not say which of the two plausible causes it is, and under launchd
+# nobody is watching a terminal to work it out. /usr/local/var is root-owned on a
+# machine that never installed Homebrew, which is the common case here.
+if ! mkdir -p "$OUT" 2>/dev/null; then
+  fail "cannot create $OUT
+  If the parent is root-owned, either give this account the directory:
+      sudo mkdir -p '$DEST' && sudo chown \"\$(whoami)\" '$DEST'
+  or pass a destination this account already owns:
+      $0 ~/building-controls-backups"
+fi
 
 # --- database ---------------------------------------------------------------
 if [ -f "$DB" ]; then

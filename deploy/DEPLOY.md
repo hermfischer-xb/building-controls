@@ -259,6 +259,51 @@ Note that **running it in the foreground will succeed and prove nothing** -- a
 foreground run writes to your terminal and never opens `StandardOutPath` at all.
 This failure exists only under launchd.
 
+### The nightly backup, and its own version of the same trap
+
+`deploy/com.building-controls.backup.plist` runs `deploy/backup.sh` at 03:15.
+Create both directories, owned by the account in `UserName`, **before**
+bootstrapping it:
+
+```bash
+sudo mkdir -p /usr/local/var/log /usr/local/var/backups/building-controls
+sudo chown "$(whoami)" /usr/local/var/log /usr/local/var/backups/building-controls
+sudo cp deploy/com.building-controls.backup.plist /Library/LaunchDaemons/
+sudo chown root:wheel /Library/LaunchDaemons/com.building-controls.backup.plist
+sudo chmod 644        /Library/LaunchDaemons/com.building-controls.backup.plist
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.backup.plist
+sudo launchctl kickstart -k system/com.building-controls.backup
+```
+
+`/usr/local/var` is root-owned on any machine that never installed Homebrew, and
+that is enough on its own to stop this job dead.
+
+**An empty or missing `/usr/local/var/log/building-controls-backup.log` does not
+mean "it ran quietly".** `backup.sh` always prints, so no log means the job never
+started. Three causes, in the order worth checking:
+
+```bash
+sudo launchctl print system/com.building-controls.backup   # "Could not find" = never bootstrapped
+grep CHANGEME /Library/LaunchDaemons/com.building-controls.backup.plist
+ls -ld /usr/local/var/log                                  # must be writable by UserName
+```
+
+The first is the common one: copying the plist does not install it, and
+`kickstart` on a service that was never bootstrapped fails without creating
+anything. The second gives a log containing only
+`/bin/bash: /Users/CHANGEME/...: No such file or directory`, which at least tells
+you launchd tried.
+
+To prove the script itself works, independently of launchd:
+
+```bash
+deploy/backup.sh ~/backup-test && ls -R ~/backup-test
+```
+
+That distinguishes a broken script from a broken job, and it is the faster test.
+Unlike the gateway, this one *is* meaningful in the foreground -- the script's
+only launchd-specific dependency is where its output goes.
+
 ### If it starts but no device ever answers
 
 The signature is a daemon that reaches the internet fine while every BACnet read

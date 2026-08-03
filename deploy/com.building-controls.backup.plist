@@ -6,7 +6,14 @@
   calendar job once the machine wakes, so a mini that was asleep at 03:15 still
   gets its backup. A repeating interval would simply have skipped the night.
 
-  Install:
+  Install. Do the first two lines BEFORE bootstrapping -- launchd opens
+  StandardOutPath as the account in UserName, and if it cannot, the job fails to
+  spawn and writes nothing, including no explanation. That failure has already
+  cost this project an afternoon once, on the gateway plist.
+
+    sudo mkdir -p /usr/local/var/log /usr/local/var/backups/building-controls
+    sudo chown "$(whoami)" /usr/local/var/log /usr/local/var/backups/building-controls
+
     sudo cp deploy/com.building-controls.backup.plist /Library/LaunchDaemons/
     sudo chown root:wheel /Library/LaunchDaemons/com.building-controls.backup.plist
     sudo chmod 644        /Library/LaunchDaemons/com.building-controls.backup.plist
@@ -17,6 +24,13 @@
 
   Check it ran:
     tail /usr/local/var/log/building-controls-backup.log
+    ls -lt /usr/local/var/backups/building-controls | head
+
+  An EMPTY OR ABSENT LOG IS NOT "IT RAN AND SAID NOTHING" -- this script always
+  prints. It means the job never started. In order of likelihood:
+    sudo launchctl print system/com.building-controls.backup   # not found = not bootstrapped
+    grep CHANGEME /Library/LaunchDaemons/com.building-controls.backup.plist
+    ls -ld /usr/local/var/log                                  # must be writable by UserName
 
   Edit the two CHANGEME paths. launchd has no shell, no PATH and no home
   directory, so both must be absolute.
