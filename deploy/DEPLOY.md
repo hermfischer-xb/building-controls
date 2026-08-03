@@ -74,12 +74,36 @@ cp config/devices.example.yaml config/devices.yaml
 Three things are deliberately **not** in git and must be created here:
 `config/devices.yaml`, `data/bms.db`, and `.venv`.
 
-**Upgrade pip first.** A pip too old to recognise current wheel tags falls back
-to building from source, and `cryptography` then demands a Rust toolchain. The
-error names Rust and looks like a missing compiler; the actual cause is almost
-always stale pip. If it persists after upgrading, report `python3 -V` and
-`pip -V` -- it means no wheel exists for that interpreter, and the fix is a
-different Python, not a compiler.
+**Upgrade pip first**, then check the architecture if the install still wants to
+compile:
+
+```bash
+uname -m          # arm64 -> wheels exist;  x86_64 -> read on
+```
+
+On an **Intel Mac there is no wheel for `cryptography`** and there will not be
+one. Every macOS wheel it has published since version 49 is
+`macosx_11_0_arm64`; the last `universal2` build was 48.0.1. pip therefore falls
+back to source and asks for a Rust toolchain, and no amount of upgrading pip
+changes that.
+
+Install Rust and let it build:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Keep it afterwards -- any future upgrade of `cryptography` rebuilds. `rustup`
+lives in `~/.cargo` and does not touch the system.
+
+The tempting alternative is pinning `cryptography==48.0.1` for its universal2
+wheel, but that means running an old version of the library that verifies
+passkey signatures for door unlock. A one-time build is the better trade.
+
+This is not specific to one package: Intel Macs are steadily losing wheel
+coverage, so expect it again elsewhere.
 
 **Not under `~/Documents`, or any TCC-protected folder.** Desktop, Documents and
 Downloads all require user consent to read. A LaunchDaemon has no GUI session in
