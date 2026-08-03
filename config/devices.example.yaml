@@ -27,6 +27,14 @@ api_port: 8237
 #   secure_cookies: true          # AFTER https works, never before
 #   behind_proxy: true            # only then is the client-IP header believed
 #   client_ip_header: cf-connecting-ip   # or x-forwarded-for for Caddy/nginx
+# The exact https origin users reach this on. Required for passkeys (Face ID /
+# fingerprint confirmation on door unlock): WebAuthn binds credentials to the
+# origin, so a mismatch -- http instead of https, a trailing slash, a different
+# hostname -- makes every passkey fail. Empty disables passkeys, which is the
+# correct behaviour on plain http since browsers refuse the API outside a secure
+# context.
+public_origin: "https://controls.16400ventura.com"
+
 secure_cookies: false
 behind_proxy: false
 
