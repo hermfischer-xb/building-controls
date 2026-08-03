@@ -266,7 +266,10 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
                 status_code=429,
             )
 
-        user = auth.authenticate(username, password)
+        # ~286 ms of CPU-bound scrypt. Left on the event loop it would stall
+        # every other request -- including the thermostat poll -- on each
+        # login attempt, which an attacker could use as a denial of service.
+        user = await asyncio.to_thread(auth.authenticate, username, password)
         if user is None:
             throttle.record_failure(username, client)
             store.log(username, "login.failed", client, outcome="error")
@@ -1032,9 +1035,9 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     ) -> dict[str, Any]:
         try:
             granted = zones.validate_grant(body.zones) if body.role == "tenant" else []
-            auth.create_user(
-                body.username, body.password, body.role, body.display_name,
-                granted, actor=user.username,
+            await asyncio.to_thread(
+                auth.create_user, body.username, body.password, body.role,
+                body.display_name, granted, user.username,
             )
         except ValueError as err:
             raise HTTPException(400, str(err)) from err
@@ -1047,7 +1050,9 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         username: str, body: PasswordRequest, user: User = Depends(require("admin"))
     ) -> dict[str, Any]:
         try:
-            if not auth.set_password(username, body.password, actor=user.username):
+            if not await asyncio.to_thread(
+                auth.set_password, username, body.password, user.username
+            ):
                 raise HTTPException(404, f"no user {username}")
         except ValueError as err:
             raise HTTPException(400, str(err)) from err

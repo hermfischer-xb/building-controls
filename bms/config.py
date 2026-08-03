@@ -173,5 +173,29 @@ class Config(BaseModel):
         return devices
 
 
+def check_permissions(path: str | Path) -> str | None:
+    """Warn if the config is readable by anyone but its owner.
+
+    This file holds the access panel's credentials, which the daemon must be
+    able to read on every call -- so they cannot be hashed, and any scheme that
+    lets the daemon recover them lets anyone with the same access recover them
+    too. Filesystem permissions are therefore the actual protection, not a
+    formality, and `/Users/Shared` is world-readable by default.
+
+    Returns a message to log, or None when the file is already restricted.
+    """
+    p = Path(path)
+    try:
+        mode = p.stat().st_mode & 0o777
+    except OSError:
+        return None
+    if mode & 0o077:
+        return (
+            f"{p} is mode {mode:03o} and holds credentials in clear text; "
+            f"restrict it with: chmod 600 {p}"
+        )
+    return None
+
+
 def load(path: str | Path) -> Config:
     return Config.model_validate(yaml.safe_load(Path(path).read_text()))

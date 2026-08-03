@@ -11,7 +11,7 @@ import logging
 import uvicorn
 
 from .api import create_app
-from .config import load
+from .config import check_permissions, load
 
 
 def main() -> None:
@@ -26,6 +26,10 @@ def main() -> None:
     )
 
     cfg = load(args.config)
+
+    warning = check_permissions(args.config)
+    if warning:
+        logging.getLogger("bms").warning(warning)
     app = create_app(cfg)
 
     if cfg.api_host == "0.0.0.0":  # noqa: S104 - the point is to refuse it

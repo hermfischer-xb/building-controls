@@ -24,9 +24,25 @@ log = logging.getLogger(__name__)
 COOKIE_NAME = "bms_session"
 SESSION_TTL_SECONDS = 30 * 24 * 3600  # a tenant should not re-auth every week
 
-# scrypt parameters. n=2**14 costs ~50ms per verification here, which is a fine
-# trade for a login that happens rarely.
-_SCRYPT = {"n": 2**14, "r": 8, "p": 1, "dklen": 32}
+# scrypt cost. OWASP's current guidance for scrypt is N=2**17, r=8, p=1; the
+# original N=2**14 here was well below that. Measured on this hardware:
+#
+#   2^14   16 MB    32 ms      what this used to be
+#   2^16   64 MB   136 ms
+#   2^17  128 MB   286 ms      current
+#
+# 286 ms is nothing for a login that happens a few times a day, and it multiplies
+# an offline attacker's cost by eight. It matters because people reuse passwords:
+# the hash of a building login may also be the hash of something that holds money.
+_SCRYPT_N = 2**17
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_DKLEN = 32
+
+# hashlib.scrypt refuses anything above OpenSSL's 32 MB default unless told
+# otherwise, so the limit has to be raised alongside N or it simply errors.
+def _maxmem(n: int, r: int) -> int:
+    return n * r * 128 * 2
 
 ROLES = ("admin", "manager", "tenant")
 # Everything a manager can do, an admin can too.
@@ -60,22 +76,57 @@ class User:
 
 
 def hash_password(password: str) -> str:
+    """Hash for storage. The cost parameters travel with the hash.
+
+    The original format was `scrypt$salt$key`, which baked the parameters into
+    the code -- so raising the cost would have invalidated every existing
+    password. Recording them per hash means old ones keep verifying at their
+    original cost while new ones use the current one.
+    """
     if len(password) < 8:
         raise ValueError("password must be at least 8 characters")
     salt = secrets.token_bytes(16)
-    key = hashlib.scrypt(password.encode(), salt=salt, **_SCRYPT)
-    return f"scrypt${salt.hex()}${key.hex()}"
+    key = hashlib.scrypt(
+        password.encode(), salt=salt, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P,
+        dklen=_DKLEN, maxmem=_maxmem(_SCRYPT_N, _SCRYPT_R),
+    )
+    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt.hex()}${key.hex()}"
+
+
+def _parse(stored: str) -> tuple[int, int, int, bytes, str] | None:
+    parts = stored.split("$")
+    if parts[0] != "scrypt":
+        return None
+    if len(parts) == 6:
+        _, n, r, p, salt_hex, key_hex = parts
+        return int(n), int(r), int(p), bytes.fromhex(salt_hex), key_hex
+    if len(parts) == 3:
+        # Legacy: parameters were implicit, and were N=2^14, r=8, p=1.
+        _, salt_hex, key_hex = parts
+        return 2**14, 8, 1, bytes.fromhex(salt_hex), key_hex
+    return None
 
 
 def verify_password(password: str, stored: str) -> bool:
     try:
-        algorithm, salt_hex, key_hex = stored.split("$")
-        if algorithm != "scrypt":
+        parsed = _parse(stored)
+        if parsed is None:
             return False
-        key = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex), **_SCRYPT)
+        n, r, p, salt, key_hex = parsed
+        key = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p,
+                             dklen=_DKLEN, maxmem=_maxmem(n, r))
     except (ValueError, TypeError):
         return False
     return hmac.compare_digest(key.hex(), key_hex)
+
+
+def needs_rehash(stored: str) -> bool:
+    """True when a stored hash predates the current cost parameters."""
+    parsed = _parse(stored)
+    if parsed is None:
+        return True
+    n, r, p, _, _ = parsed
+    return (n, r, p) != (_SCRYPT_N, _SCRYPT_R, _SCRYPT_P)
 
 
 def hash_token(token: str) -> str:
@@ -230,6 +281,16 @@ class AuthStore:
             return None
         if not verify_password(password, row["password_hash"]):
             return None
+
+        # Upgrade the stored hash in place when it predates the current cost.
+        # Doing it here is the only moment the plaintext is available, so the
+        # alternative is asking every user to reset a password that is fine.
+        if needs_rehash(row["password_hash"]):
+            self._conn.execute(
+                "UPDATE app_user SET password_hash = ? WHERE id = ?",
+                (hash_password(password), row["id"]),
+            )
+            log.info("upgraded password hash cost for %s", row["username"])
 
         self._conn.execute(
             "UPDATE app_user SET last_login = ? WHERE id = ?", (time.time(), row["id"])
