@@ -18,6 +18,17 @@
 # own .backup, which takes a consistent snapshot of a live database. A plain
 # `cp` of bms.db would not: writes live in bms.db-wal until a checkpoint, so the
 # copy could be missing the last few minutes, or be torn mid-transaction.
+#
+# SCOPE: this protects against a bad edit, a botched upgrade, a corrupted
+# database, and "what did the schedule look like last week". It does NOT protect
+# against the disk failing or the machine being stolen, because the copies live
+# on that same disk. For that, point something at the destination directory --
+# Time Machine, or an rsync to another host -- and remember it will be carrying
+# password hashes and the access panel's credentials, so it needs to land
+# somewhere at least as protected as the mini.
+#
+# The destination is deliberately outside the repo, so a bad checkout, a stray
+# `git clean -fdx` or re-cloning cannot take the backups with it.
 
 set -euo pipefail
 

@@ -217,6 +217,13 @@ Database, config, plist, and the git SHA that was running; 30 kept; restore
 instructions written into every backup directory. Install
 `deploy/com.building-controls.backup.plist` to run it nightly.
 
+This protects against a bad edit, a botched upgrade, a corrupted database, and
+"what did the schedule look like last week". It does **not** protect against the
+disk failing, since the copies live on that disk — point Time Machine or an
+`rsync` at the destination for that, bearing in mind it carries password hashes
+and the access panel's credentials. The destination sits outside the repo so a
+bad checkout cannot take the backups with it.
+
 **The gateway does not need to be stopped**, because it uses `sqlite3 .backup`
 rather than copying the file. That distinction is not cosmetic: measured against
 a live gateway-style connection, a plain `cp` of `bms.db` produced a file in
