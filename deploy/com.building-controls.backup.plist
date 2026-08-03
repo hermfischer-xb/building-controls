@@ -6,18 +6,14 @@
   calendar job once the machine wakes, so a mini that was asleep at 03:15 still
   gets its backup. A repeating interval would simply have skipped the night.
 
-  Install. Do the first two lines BEFORE bootstrapping -- launchd opens
-  StandardOutPath as the account in UserName, and if it cannot, the job fails to
-  spawn and writes nothing, including no explanation. That failure has already
-  cost this project an afternoon once, on the gateway plist.
+  The placeholders below are substituted at install time rather than hand-edited.
+  Do not copy this file into /Library/LaunchDaemons unchanged: the account it
+  names does not exist, and launchd fails such a job before it opens a log, so
+  the only symptom is silence. See "Install the launchd jobs" in DEPLOY.md, which
+  does both plists in one paste:
 
-    sudo mkdir -p /usr/local/var/log /usr/local/var/backups/building-controls
-    sudo chown "$(whoami)" /usr/local/var/log /usr/local/var/backups/building-controls
-
-    sudo cp deploy/com.building-controls.backup.plist /Library/LaunchDaemons/
-    sudo chown root:wheel /Library/LaunchDaemons/com.building-controls.backup.plist
-    sudo chmod 644        /Library/LaunchDaemons/com.building-controls.backup.plist
-    sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.backup.plist
+    sudo launchctl print system/com.building-controls.backup | grep username
+      -> must show your account. Anything else means it was installed unedited.
 
   Run it now, without waiting for 03:15:
     sudo launchctl kickstart -k system/com.building-controls.backup
@@ -27,13 +23,23 @@
     ls -lt /usr/local/var/backups/building-controls | head
 
   An EMPTY OR ABSENT LOG IS NOT "IT RAN AND SAID NOTHING" -- this script always
-  prints. It means the job never started. In order of likelihood:
-    sudo launchctl print system/com.building-controls.backup   # not found = not bootstrapped
-    grep CHANGEME /Library/LaunchDaemons/com.building-controls.backup.plist
-    ls -ld /usr/local/var/log                                  # must be writable by UserName
+  prints. It means no process ever started. Read `launchctl print`:
 
-  Edit the two CHANGEME paths. launchd has no shell, no PATH and no home
-  directory, so both must be absolute.
+    last exit code = 78: EX_CONFIG   the UserName does not exist. launchd gave up
+                                     at user lookup, before opening the log, which
+                                     is why there is no log rather than a log
+                                     containing an error.
+    state = spawn scheduled          plus "active count = 0" and no log: launchd
+    with no exit code                could not open StandardOutPath as UserName.
+    Could not find service           never bootstrapped. Copying a plist does not
+                                     install it, and kickstart on a service that
+                                     does not exist creates nothing.
+
+  "properties = penalty box" means launchd has throttled it after repeated
+  failures. bootout then bootstrap clears it; kickstart alone does not.
+
+  launchd has no shell, no PATH and no home directory, so every path here must be
+  absolute.
 -->
 <plist version="1.0">
 <dict>

@@ -166,36 +166,35 @@ mechanism is a backup restore, not an export tool — that is what `backup.sh` i
 
 ---
 
-## Open right now: the backup job wrote no log
+## Resolved on 2026-08-03: the backup job that wrote no log
 
-Herm installed the backup plist on the mini and
-`/usr/local/var/log/building-controls-backup.log` was not created.
+Diagnosed and fixed; recorded because the symptom is misleading and will recur on
+the next machine.
 
-**That is not "it ran and said nothing".** `backup.sh` prints on every path,
-including failure. No log means the job never started, so do not go looking for a
-bug in the script first. Three causes, in order:
+The plist was bootstrapped with its `CHANGEME` placeholders still in place.
+`launchctl print` showed `username = CHANGEME` and `last exit code = 78:
+EX_CONFIG`: launchd rejected the job at **user lookup, before opening
+StandardOutPath**, so the failure had nowhere to be written. Silence, not an
+error message. It was also in `properties = penalty box`, which `kickstart` does
+not clear — only `bootout` + `bootstrap` does.
 
-```bash
-sudo launchctl print system/com.building-controls.backup   # "Could not find" = never bootstrapped
-grep CHANGEME /Library/LaunchDaemons/com.building-controls.backup.plist
-ls -ld /usr/local/var/log                                  # must be writable by UserName
-```
-
-Copying a plist does not install it, and `kickstart` on a service that was never
-bootstrapped fails without creating anything — that is the most likely answer.
-
-Prove the script itself works first, since it is the faster test and it is
-meaningful in the foreground (unlike the gateway, whose failure mode only exists
-under launchd):
+`deploy/backup.sh` itself was fine and had already produced a good backup when
+run by hand. That is the faster test and it comes first:
 
 ```bash
 deploy/backup.sh ~/backup-test && ls -R ~/backup-test
 ```
 
-Note `/usr/local/var` is root-owned on a machine that never installed Homebrew,
-which alone is enough to stop the job. The install steps in DEPLOY.md now create
-and chown both directories first; the version Herm used did not say to, which is
-my omission, not his mistake.
+DEPLOY.md now has **Install the launchd jobs**, which substitutes both plists
+with `sed` instead of asking anyone to hand-edit them, and **If a job never runs
+and writes no log**, a table mapping each `launchctl print` signature to its
+cause. Two substitutions are needed, not one: the repo path contains the literal
+`CHANGEME`, so a single `s/CHANGEME/$(whoami)/` yields
+`/Users/hermf/building-controls` on this machine, whose repo is at
+`/Users/Shared/building-controls`.
+
+The mini's repo is at `/Users/Shared/building-controls` — outside TCC, per the
+`~/Documents` trap documented in DEPLOY.md. Do not assume a home-directory path.
 
 ## Still open, in priority order
 

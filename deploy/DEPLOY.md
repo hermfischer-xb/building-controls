@@ -259,40 +259,71 @@ Note that **running it in the foreground will succeed and prove nothing** -- a
 foreground run writes to your terminal and never opens `StandardOutPath` at all.
 This failure exists only under launchd.
 
-### The nightly backup, and its own version of the same trap
+### Install the launchd jobs
 
-`deploy/com.building-controls.backup.plist` runs `deploy/backup.sh` at 03:15.
-Create both directories, owned by the account in `UserName`, **before**
-bootstrapping it:
+Both plists ship with `CHANGEME` placeholders. **Do not hand-edit them.** A
+missed one is not a typo you notice: launchd rejects a job whose `UserName` does
+not exist with `EX_CONFIG` *before* it opens the log file, so the only symptom is
+a job that never runs and never explains itself.
+
+Run this from the repo root, as the account the daemons should run as:
+
+```bash
+REPO="$PWD"
+for job in gateway backup; do
+  sed -e "s|/Users/CHANGEME/building-controls|$REPO|g" \
+      -e "s|<string>CHANGEME</string>|<string>$(whoami)</string>|g" \
+      "deploy/com.building-controls.$job.plist" > "/tmp/$job.plist"
+  plutil -lint "/tmp/$job.plist" || break
+  sudo install -o root -g wheel -m 644 "/tmp/$job.plist" \
+      "/Library/LaunchDaemons/com.building-controls.$job.plist"
+done
+```
+
+Two substitutions, not one: the repo path *contains* `CHANGEME`, so a single
+`s/CHANGEME/$(whoami)/` would produce `/Users/hermf/building-controls` on a
+machine whose repo is at `/Users/Shared/building-controls`. Order matters — path
+first, then the bare `UserName`.
+
+Create the log and backup directories, owned by that same account, **before**
+bootstrapping. launchd opens `StandardOutPath` as `UserName`, and `/usr/local/var`
+is root-owned on any machine that never installed Homebrew:
 
 ```bash
 sudo mkdir -p /usr/local/var/log /usr/local/var/backups/building-controls
 sudo chown "$(whoami)" /usr/local/var/log /usr/local/var/backups/building-controls
-sudo cp deploy/com.building-controls.backup.plist /Library/LaunchDaemons/
-sudo chown root:wheel /Library/LaunchDaemons/com.building-controls.backup.plist
-sudo chmod 644        /Library/LaunchDaemons/com.building-controls.backup.plist
+
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.gateway.plist
 sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.backup.plist
-sudo launchctl kickstart -k system/com.building-controls.backup
+sudo launchctl kickstart -k system/com.building-controls.backup   # don't wait for 03:15
 ```
 
-`/usr/local/var` is root-owned on any machine that never installed Homebrew, and
-that is enough on its own to stop this job dead.
-
-**An empty or missing `/usr/local/var/log/building-controls-backup.log` does not
-mean "it ran quietly".** `backup.sh` always prints, so no log means the job never
-started. Three causes, in the order worth checking:
+Then confirm what launchd actually resolved, rather than what you meant:
 
 ```bash
-sudo launchctl print system/com.building-controls.backup   # "Could not find" = never bootstrapped
-grep CHANGEME /Library/LaunchDaemons/com.building-controls.backup.plist
-ls -ld /usr/local/var/log                                  # must be writable by UserName
+sudo launchctl print system/com.building-controls.backup | grep -E "username|program|exit"
 ```
 
-The first is the common one: copying the plist does not install it, and
-`kickstart` on a service that was never bootstrapped fails without creating
-anything. The second gives a log containing only
-`/bin/bash: /Users/CHANGEME/...: No such file or directory`, which at least tells
-you launchd tried.
+### If a job never runs and writes no log
+
+`backup.sh` prints on every path, so **an empty or missing
+`/usr/local/var/log/building-controls-backup.log` does not mean "it ran
+quietly"** — it means no process ever started. `launchctl print` names which:
+
+| In `launchctl print` | Cause |
+|---|---|
+| `last exit code = 78: EX_CONFIG`, `username = CHANGEME` | the account does not exist. Rejected at user lookup, before the log was opened — hence silence rather than an error |
+| `state = spawn scheduled`, `active count = 0`, no exit code | launchd could not open `StandardOutPath` as `UserName`. Check `ls -ld /usr/local/var/log` |
+| `Could not find service` | never bootstrapped. Copying a plist does not install it, and `kickstart` on a service that does not exist creates nothing |
+
+`properties = penalty box` means launchd has throttled it after repeated
+failures. `bootout` then `bootstrap` clears it; **`kickstart` alone does not**, so
+a fixed plist can still look broken until it is properly reloaded:
+
+```bash
+sudo launchctl bootout system/com.building-controls.backup
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.backup.plist
+```
 
 To prove the script itself works, independently of launchd:
 
@@ -301,8 +332,8 @@ deploy/backup.sh ~/backup-test && ls -R ~/backup-test
 ```
 
 That distinguishes a broken script from a broken job, and it is the faster test.
-Unlike the gateway, this one *is* meaningful in the foreground -- the script's
-only launchd-specific dependency is where its output goes.
+Unlike the gateway, this one *is* meaningful in the foreground — the script's only
+launchd-specific dependency is where its output goes.
 
 ### If it starts but no device ever answers
 
