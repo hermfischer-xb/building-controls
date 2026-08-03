@@ -31,6 +31,7 @@ def build_router(
     zones,
     passkeys,
     require_device: Callable[[int, Any], Any],
+    access_buttons: Callable[[Any], Any],
 ) -> APIRouter:
     router = APIRouter(include_in_schema=False)
 
@@ -55,8 +56,13 @@ def build_router(
         if user is None:
             return signin(request)
         status = reconciler.status if user.at_least("manager") else None
+        # Doors and lights belong on the page people actually land on. Reaching
+        # them only from /t/{device} meant anyone who signed in without a
+        # bookmarked deep link had no way to open a door at all.
+        access = await access_buttons(user)
         return HTMLResponse(
-            pages.dashboard(user, visible_devices(user), status, reconciler.outdoor)
+            pages.dashboard(user, visible_devices(user), status, reconciler.outdoor,
+                            doors=access["doors"], lighting=access["lighting"])
         )
 
     @router.get("/ui/devices/{device_id}", response_class=HTMLResponse)

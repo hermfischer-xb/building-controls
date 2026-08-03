@@ -80,6 +80,12 @@ input,select{font:inherit;padding:.45rem .6rem;border-radius:9px;border:1px soli
 input[type=number]{width:6rem}
 label{font-size:.85rem;color:var(--muted);display:block;margin-bottom:.25rem}
 .row{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap}
+/* Door and light buttons. Pressed on a phone by someone standing outside in the
+   dark, so they get a full-width 56px target rather than the compact desktop
+   button used everywhere else. */
+.tap{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr))}
+.tap button{min-height:56px;font-size:1rem;font-weight:600;
+            -webkit-tap-highlight-color:transparent}
 .big{font-size:2rem;font-weight:650;line-height:1.1;font-variant-numeric:tabular-nums}
 .sub{color:var(--muted);font-size:.85rem}
 .empty{color:var(--muted);padding:1.5rem 0;text-align:center}

@@ -61,11 +61,81 @@ def _status_chip(device: dict) -> str:
 # --- dashboard ---------------------------------------------------------------
 
 
+def _access_card(doors: list[dict], lighting: list[dict]) -> str:
+    """Door and hallway-light buttons, for the page everyone lands on.
+
+    Both are momentary or self-expiring on the panel, which is what makes them
+    safe on a dashboard: nothing here can be left switched on. Unlock is gated on
+    a passkey by the API -- `withVerification` only re-runs the call after the
+    server has asked for it, so the common case stays a single tap.
+    """
+    if not doors and not lighting:
+        return ""
+
+    sections = []
+    if doors:
+        buttons = "".join(
+            f'<button type="button" class="door" data-door="{d["id"]}">{e(d["name"])}</button>'
+            for d in doors
+        )
+        sections.append(
+            f'<div><h2 style="margin-top:0">Open a door</h2><div class="tap">{buttons}</div>'
+            '<p class="sub">Unlocks for a few seconds, then locks itself.</p></div>'
+        )
+    if lighting:
+        buttons = "".join(
+            f'<button type="button" class="light" data-light="{t["id"]}">'
+            f'{e(t.get("duration") or t.get("name") or "Lights on")}</button>'
+            for t in lighting
+        )
+        sections.append(
+            f'<div><h2 style="margin-top:0">Hallway lights</h2><div class="tap">{buttons}</div></div>'
+        )
+
+    return f"""
+<div class="card grid {"two" if len(sections) > 1 else ""}">{"".join(sections)}</div>
+<script>
+// Any of these can take a moment on the panel, so the button disables itself --
+// a second tap would fire a second grant, not cancel the first.
+function guard(button, run){{
+  return async () => {{
+    const label = button.textContent;
+    button.disabled = true; button.textContent = 'Working…';
+    // Holds off the dashboard's periodic reload: navigating away mid-action
+    // would tear down the Face ID prompt the browser is showing.
+    window.__busy = true;
+    try {{ await run(); }}
+    catch (err) {{ toast(err.message || 'That did not work', false); }}
+    finally {{ button.disabled = false; button.textContent = label; window.__busy = false; }}
+  }};
+}}
+document.querySelectorAll('.door').forEach(b => b.addEventListener('click', guard(b, async () => {{
+  const out = await withVerification(() => api('POST', '/doors/' + b.dataset.door + '/unlock'));
+  toast(out.lights ? out.door + ' is open — ' + out.lights : out.door + ' is open', true);
+}})));
+document.querySelectorAll('.light').forEach(b => b.addEventListener('click', guard(b, async () => {{
+  await api('POST', '/lighting/' + b.dataset.light);
+  toast('Lights on', true);
+}})));
+</script>"""
+
+
 def dashboard(user, devices: list[dict], reconcile: dict | None,
-              outdoor: dict | None = None) -> str:
+              outdoor: dict | None = None, doors: list[dict] | None = None,
+              lighting: list[dict] | None = None) -> str:
+    access = _access_card(doors or [], lighting or [])
+
     if not devices:
-        body = '<h1>Dashboard</h1><p class="empty">No devices visible for your account.</p>'
+        body = (
+            f'<h1>Dashboard</h1>{access}'
+            '<p class="empty">No devices visible for your account.</p>'
+        )
         return page("Dashboard", user, body, active="/")
+
+    # A tenant on a phone wants the big bypass page, not the operator's detail
+    # screen -- that one is built for a manager at a desk and offers them nothing
+    # they are allowed to change.
+    detail = "/t/{id}" if user.role == "tenant" else "/ui/devices/{id}"
 
     rows = []
     for d in devices:
@@ -77,7 +147,7 @@ def dashboard(user, devices: list[dict], reconcile: dict | None,
             bypass = chip(f"bypass {h}h {m:02d}m" if h else f"bypass {m}m", "warn")
         rows.append(
             f"""<tr>
- <td><a href="/ui/devices/{d['device_id']}">{e(d['name'])}</a>
+ <td><a href="{detail.format(id=d['device_id'])}">{e(d['name'])}</a>
      <div class="sub">{e(d['zone'])} · {e(d['address'])}</div></td>
  <td>{_status_chip(d)} {bypass}</td>
  <td class="num big" style="font-size:1.25rem">{num(v.get('space_temp'), '°')}</td>
@@ -129,6 +199,7 @@ def dashboard(user, devices: list[dict], reconcile: dict | None,
     body = f"""
 <h1>Dashboard</h1>
 <p class="lede">{online} of {len(devices)} device(s) responding.</p>
+{access}
 {outdoor_card}
 {banner}
 <div class="card"><div class="wrap"><table>
@@ -141,7 +212,12 @@ def dashboard(user, devices: list[dict], reconcile: dict | None,
 <script>
 // The devices come from a poll cache, so refreshing the page is the honest way
 // to show new values; a partial DOM update would imply more liveness than exists.
-setTimeout(() => location.reload(), 15000);
+// It waits on any door or light action: reloading while the browser is showing a
+// Face ID sheet would cancel the unlock the person is standing there waiting for.
+setTimeout(function tick() {{
+  if (window.__busy) {{ setTimeout(tick, 4000); return; }}
+  location.reload();
+}}, 15000);
 </script>
 """
     return page("Dashboard", user, body, active="/")

@@ -42,6 +42,11 @@ from .ui.routes import build_router as build_ui_router
 
 log = logging.getLogger(__name__)
 
+# How long a page render may spend waiting on the access panel before drawing the
+# buttons without its labels. Nothing a person is standing at a door for should
+# wait on a device that is not answering.
+ACCESS_UI_BUDGET = 3.0
+
 
 class WriteRequest(BaseModel):
     value: float | int | bool = Field(description="value to write")
@@ -419,21 +424,7 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
         device = require_device(device_id, user)
         state = cache.get(device_id)
-        doors = [{"id": d.id, "name": d.name} for d in _visible_doors(user)] if truportal else []
-
-        # Durations come from the panel, so a button cannot advertise a period
-        # the hardware is not set to. A panel that is unreachable simply means no
-        # lighting buttons rather than a broken page.
-        lighting = []
-        if truportal is not None:
-            try:
-                by_id = {t.id: t for t in (await truportal.inventory())["triggers"]}
-                for cfg_t in _visible_triggers(user):
-                    dev = by_id.get(cfg_t.id)
-                    if dev:
-                        lighting.append({"id": cfg_t.id, "duration": dev.duration_text})
-            except TruPortalError as err:
-                log.warning("could not read lighting actions for the tenant page: %s", err)
+        access = await access_buttons(user)
 
         return HTMLResponse(render_tenant(
             device_id,
@@ -441,8 +432,8 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             state.to_dict(cfg.poll_interval_seconds * 3) if state else {},
             passkeys_available=passkeys.configured,
             has_passkey=passkeys.has_passkey(user.id) if passkeys.configured else False,
-            doors=doors,
-            lighting=lighting,
+            doors=access["doors"],
+            lighting=access["lighting"],
         ))
 
     @app.get("/robots.txt", include_in_schema=False)
@@ -769,6 +760,55 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             if user.at_least("manager") or t.zone == "*" or t.zone in user.zones:
                 out.append(t)
         return out
+
+    async def access_buttons(user: User) -> dict[str, list[dict[str, Any]]]:
+        """The doors and lighting actions to draw for this user.
+
+        Shared by the tenant page and the dashboard so the two cannot drift into
+        offering different doors to the same person. Durations come from the
+        panel, so a button can never advertise a period the hardware is not set
+        to, and a panel that is unreachable means no buttons rather than a page
+        that fails to render.
+        """
+        if truportal is None:
+            return {"doors": [], "lighting": []}
+
+        # Doors come from config, so they are listed whether or not the panel
+        # answers -- and the unlock itself would fail loudly if it were down.
+        doors = [{"id": d.id, "name": d.name} for d in _visible_doors(user)]
+
+        # Only the *labels* need the panel. Bounded, because the SOAP client
+        # waits 20s per call and inventory makes three: an unreachable panel
+        # would otherwise hold up a page that every sign-in lands on, and the
+        # dashboard reloads itself every 15 seconds. A warm cache returns
+        # immediately, so this budget only ever bites when something is wrong.
+        by_id: dict[int, Any] = {}
+        panel_answered = True
+        try:
+            inventory = await asyncio.wait_for(truportal.inventory(), ACCESS_UI_BUDGET)
+            by_id = {t.id: t for t in inventory["triggers"]}
+        except (TruPortalError, asyncio.TimeoutError) as err:
+            panel_answered = False
+            log.warning("could not read lighting actions: %s", err)
+
+        lighting: list[dict[str, Any]] = []
+        for cfg_t in _visible_triggers(user):
+            dev = by_id.get(cfg_t.id)
+            if dev is None and panel_answered:
+                # The panel replied and does not have this action: the config is
+                # wrong, and a button that can only fail helps nobody.
+                log.warning("configured lighting trigger %s is not on the panel", cfg_t.id)
+                continue
+            # A panel that did not answer is different -- the action probably
+            # still exists, firing it does not depend on the inventory, and a
+            # generic label claims no duration the hardware might not be set to.
+            lighting.append({
+                "id": cfg_t.id,
+                "name": dev.name if dev else "Lights on",
+                "duration": dev.duration_text if dev else None,
+            })
+
+        return {"doors": doors, "lighting": lighting}
 
     async def _fire_zone_lights(user: User) -> str | None:
         """Turn on the lights for a tenant's own floor, best effort.
@@ -1104,7 +1144,7 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     # Mounted last so it can close over require_device and the running services.
     app.include_router(
         build_ui_router(cfg, cache, store, auth, reconciler, client, zones, passkeys,
-                        require_device)
+                        require_device, access_buttons)
     )
 
     return app
