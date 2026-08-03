@@ -158,8 +158,39 @@ chmod 700 data && chmod 600 data/bms.db
 ```
 
 `/Users/Shared` is world-readable (`drwxrwxrwt`) and the default file mode is
-not; `bms.db` holds the admin password hash and every live session token, so any
-local account could otherwise copy it.
+not. Two files need restricting, and both must be owned by whatever account the
+daemon runs as -- mode 600 owned by the wrong user just stops it starting:
+
+```bash
+sudo chown -R <daemon-user> data config/devices.yaml
+sudo chmod 700 data && sudo chmod 600 data/bms.db config/devices.yaml
+```
+
+`bms.db` holds password hashes and every live session token. `devices.yaml`
+holds the access panel's credentials **in clear text**, and they cannot be
+hashed: the daemon presents them on every call, so it must be able to recover
+them. Any scheme that lets it do so -- Keychain, an encrypted file, an
+environment variable -- also lets anyone with equivalent access. Environment
+variables are worse, since a LaunchDaemon's environment lives in a
+world-readable plist. With FileVault off the disk is not encrypted at rest
+either, so file permissions and physical security of the machine are the actual
+controls. The gateway warns at startup if either file is too permissive.
+
+**Consider a dedicated service account.** If the daemon runs as your own login
+and you also use the machine interactively, anything else running as you can
+read both files. A non-login account closes that:
+
+```bash
+sudo sysadminctl -addUser _bms -fullName "Building Controls" \
+     -home /var/empty -shell /usr/bin/false
+sudo dscl . -create /Users/_bms IsHidden 1
+sudo chown -R _bms /Users/Shared/building-controls
+```
+
+Set `UserName` to `_bms` in the plist and re-bootstrap. Note it will need the
+Local Network Privacy grant again -- that is per identity, and granting it for
+an account with no GUI session is the fiddly part, so do it when you can
+iterate rather than immediately before you need the system working.
 
 Confirm it polls a thermostat, then Ctrl-C. **A healthy poll logs nothing at
 all** — the poll loop has no logging statements, by design. Silence is success;
