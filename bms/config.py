@@ -66,6 +66,43 @@ class OutdoorWeatherConfig(BaseModel):
     longitude: float | None = Field(default=None)
 
 
+class TruPortalDoorConfig(BaseModel):
+    id: int = Field(description="devID from the panel, not the door's position")
+    name: str = Field(description="what a tenant should see, e.g. 'Front entrance'")
+    zones: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description="zones whose tenants may unlock it. '*' means any tenant -- correct "
+        "for a shared entrance, wrong for a door into one suite.",
+    )
+
+
+class TruPortalTriggerConfig(BaseModel):
+    id: int = Field(description="action map id from the panel")
+    zone: str = Field(default="*", description="zone this lights, or '*' for the building")
+    role: str = Field(
+        default="manager",
+        description="lowest role that may fire it: tenant | manager | admin. Mapped "
+        "explicitly rather than inferred from the action's name, so renaming an action "
+        "in TruPortal cannot quietly hand tenants a six-hour trigger.",
+    )
+
+
+class TruPortalConfig(BaseModel):
+    """An Interlogix TruPortal panel. Absent or disabled, none of it is exposed."""
+
+    enabled: bool = Field(default=False)
+    host: str = Field(default="", description="IP or hostname; https is assumed")
+    username: str = Field(default="")
+    password: str = Field(default="")
+    verify_tls: bool = Field(
+        default=False,
+        description="the panel carries a self-signed certificate and the vendor closed in "
+        "2020, so there is no path to a trusted one",
+    )
+    doors: list[TruPortalDoorConfig] = Field(default_factory=list)
+    lighting_triggers: list[TruPortalTriggerConfig] = Field(default_factory=list)
+
+
 class Config(BaseModel):
     bacnet: BacnetConfig
     devices: list[DeviceConfig]
@@ -110,6 +147,7 @@ class Config(BaseModel):
         "mismatch makes every passkey fail. Empty disables passkeys entirely, which is "
         "correct on plain HTTP -- browsers refuse the API outside a secure context.",
     )
+    truportal: TruPortalConfig = Field(default_factory=TruPortalConfig)
     outdoor_weather: OutdoorWeatherConfig = Field(default_factory=OutdoorWeatherConfig)
     outdoor_sensor_device_id: int | None = Field(
         default=None,
