@@ -55,10 +55,24 @@ log = logging.getLogger(__name__)
 CHALLENGE_TTL_SECONDS = 180.0
 
 # How recently a verification must have happened for a step-up action to be
-# allowed. Long enough to unlock two doors in a row without a second face scan,
-# short enough that walking away from an unlocked phone does not leave the
-# building openable.
-VERIFICATION_WINDOW_SECONDS = 120.0
+# allowed.
+#
+# This is exactly the window in which a phone taken from its owner can open a
+# door: whoever holds it cannot re-verify, because that needs the owner's face.
+# So the number is the exposure, and it should be as small as the real use
+# permits.
+#
+# The case it has to cover is one arrival: open the garage gate, park, walk to
+# the door -- about 45 seconds by the building's own reckoning. 90 gives that
+# double the room without leaving a phone on a desk able to open the building for
+# two minutes. Falling outside it costs one extra face scan, which is cheap; the
+# error worth avoiding is on the other side.
+#
+# Measured from the scan, deliberately not extended by use. Refreshing it on each
+# unlock would cover a slow walk, but it would also let someone who took the
+# phone inside the window keep it alive indefinitely by opening a door every
+# minute, and walk the whole building on one stolen scan.
+VERIFICATION_WINDOW_SECONDS = 90.0
 
 
 class PasskeyError(Exception):

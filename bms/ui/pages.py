@@ -12,6 +12,7 @@ import datetime as dt
 from typing import Any
 
 from ..holidays import describe, occurrences
+from ..passkeys import VERIFICATION_WINDOW_SECONDS
 from ..points import (
     SETPOINT_LIMITS, OccupancyState, ScheduleState, TempMode,
     is_valid as is_valid_reading,
@@ -1008,8 +1009,12 @@ opens. Face ID on an iPhone, fingerprint or face on Android.</p>
 <div class="card">
  <p class="sub">A signed-in session proves you logged in once — possibly weeks
     ago. Unlocking an exterior door deserves a stronger check than that, and this
-    is the one that also survives a phone being stolen while unlocked.
+    is the one that still holds if the phone is stolen while unlocked: whoever
+    has it cannot pass the check without your face.
     The biometric never leaves the device and this server never sees it.</p>
+ <p class="sub">One check covers {int(VERIFICATION_WINDOW_SECONDS)} seconds, so
+    opening the gate and then the door does not ask twice. After that it asks
+    again.</p>
  <div class="row" style="margin-top:1rem">
   <div><label for="pklabel">Name this device</label>
    <input id="pklabel" placeholder="Herm's iPhone" maxlength="60"></div>
