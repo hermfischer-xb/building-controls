@@ -20,6 +20,7 @@ a few hours of conditioning, not a floor left running all weekend.
 
 from __future__ import annotations
 
+from .passkey_js import PASSKEY_JS
 from .ui.layout import FAVICON
 
 # Offered durations. Kept short and legible; the device caps at 1080 minutes but
@@ -71,7 +72,9 @@ def render_login(error: str = "", next_url: str = "/") -> str:
 
 
 def render(device_id: int, name: str, state: dict,
-           passkeys_available: bool = False, has_passkey: bool = False) -> str:
+           passkeys_available: bool = False, has_passkey: bool = False,
+           doors: list[dict] | None = None,
+           lighting: list[dict] | None = None) -> str:
     values = state.get("values", {})
     online = state.get("online", False)
     stale = state.get("stale", True)
@@ -102,6 +105,34 @@ def render(device_id: int, name: str, state: dict,
         f'<button type="button" data-minutes="{minutes}">{label}</button>'
         for minutes, label in DURATIONS
     )
+
+    # Doors and lights. Each is momentary or self-expiring on the panel, which is
+    # what makes them safe to put on a page a tenant reaches from a bookmark --
+    # nothing here can be left switched on.
+    door_section = ""
+    if doors:
+        door_buttons = "".join(
+            f'<button type="button" class="door" data-door="{d["id"]}">{d["name"]}</button>'
+            for d in doors
+        )
+        door_section = (
+            '<h2>Open a door</h2>'
+            f'<div class="grid">{door_buttons}</div>'
+            '<p class="hint">Unlocks for a few seconds, then locks itself. '
+            'Your floor lights come on too.</p>'
+        )
+
+    light_section = ""
+    if lighting:
+        light_buttons = "".join(
+            f'<button type="button" class="light" data-light="{t["id"]}">'
+            f'{t["duration"] or "Lights on"}</button>'
+            for t in lighting
+        )
+        light_section = (
+            '<h2>Hallway lights</h2>'
+            f'<div class="grid">{light_buttons}</div>'
+        )
 
     # Enrolment lives on the operator UI, which a tenant has no other route to.
     # Without a link from here the feature is unreachable for the people it is
@@ -144,6 +175,7 @@ def render(device_id: int, name: str, state: dict,
  button:active{{transform:scale(.97)}}
  button[disabled]{{opacity:.5}}
  .stop{{grid-column:1/-1;border-color:#f0c0bd;color:#c5221f;margin-top:.25rem}}
+ .hint{{font-size:.85rem;color:#666;margin:.6rem 0 0}}
  .foot{{margin-top:2rem;text-align:center;font-size:.9rem;color:#666}}
  .foot a{{color:#1a73e8}}
  #msg{{margin-top:1rem;padding:.85rem 1rem;border-radius:12px;display:none;font-size:.95rem}}
@@ -156,7 +188,7 @@ def render(device_id: int, name: str, state: dict,
    .on .status{{color:#81c995}} .warn .status{{color:#f28b82}}
    .stop{{border-color:#5c2f2c;color:#f28b82}}
    #msg.ok{{background:#122b1a;color:#81c995}} #msg.err{{background:#2d1614;color:#f28b82}}
-   .foot{{color:#9a9aa2}} .foot a{{color:#8ab4f8}}
+   .foot{{color:#9a9aa2}} .foot a{{color:#8ab4f8}} .hint{{color:#9a9aa2}}
  }}
 </style>
 
@@ -174,10 +206,30 @@ def render(device_id: int, name: str, state: dict,
   <button type="button" class="stop" data-minutes="0">Stop early</button>
 </div>
 
+{door_section}
+{light_section}
+
 <p id="msg"></p>
 {footer}
 
 <script>
+{PASSKEY_JS}
+// passkeyRegister/passkeyVerify call api(); the tenant page keeps its own
+// minimal fetch wrapper rather than pulling in the whole operator helper set.
+async function api(method, path, body) {{
+  const res = await fetch(path, {{
+    method,
+    headers: body ? {{'content-type': 'application/json'}} : {{}},
+    body: body ? JSON.stringify(body) : null
+  }});
+  if (!res.ok) {{
+    let d = 'HTTP ' + res.status;
+    try {{ const j = await res.json();
+           d = (j.detail && (j.detail.code || j.detail.detail)) || j.detail || d; }} catch (e) {{}}
+    throw new Error(d);
+  }}
+  return res.json().catch(() => null);
+}}
 const msg = document.getElementById('msg');
 const buttons = [...document.querySelectorAll('button')];
 
@@ -210,5 +262,54 @@ async function send(minutes) {{
 }}
 
 buttons.forEach(b => b.addEventListener('click', () => send(+b.dataset.minutes)));
+
+const acting = [...document.querySelectorAll('.door, .light')];
+function busy(on) {{ acting.forEach(b => b.disabled = on); }}
+
+async function post(path) {{
+  const res = await fetch(path, {{method: 'POST'}});
+  if (!res.ok) {{
+    let detail = 'HTTP ' + res.status;
+    try {{ const j = await res.json();
+           detail = (j.detail && (j.detail.code || j.detail.detail)) || j.detail || detail; }}
+    catch (e) {{}}
+    throw new Error(detail);
+  }}
+  return res.json();
+}}
+
+document.querySelectorAll('.door').forEach(b => b.addEventListener('click', async () => {{
+  busy(true);
+  msg.className = ''; msg.textContent = '';
+  try {{
+    // Face ID is prompted only if the server says verification is required, so
+    // a second door within the window opens on a single tap.
+    const out = await withVerification(() => post('/doors/' + b.dataset.door + '/unlock'));
+    msg.className = 'ok';
+    msg.textContent = out.lights
+      ? 'Open — go ahead. Lights are on.'
+      : 'Open — go ahead.';
+  }} catch (err) {{
+    msg.className = 'err';
+    msg.textContent = /NotAllowed|abort/i.test(err.message)
+      ? 'Cancelled.'
+      : /passkey_required/.test(err.message)
+        ? 'Set up Face ID first — link at the bottom of this page.'
+        : 'Could not confirm that. Check the door before trying again.';
+  }}
+  busy(false);
+}}));
+
+document.querySelectorAll('.light').forEach(b => b.addEventListener('click', async () => {{
+  busy(true);
+  msg.className = ''; msg.textContent = '';
+  try {{
+    await post('/lighting/' + b.dataset.light);
+    msg.className = 'ok'; msg.textContent = 'Lights on.';
+  }} catch (err) {{
+    msg.className = 'err'; msg.textContent = 'Could not turn the lights on.';
+  }}
+  busy(false);
+}}));
 </script>
 """

@@ -71,8 +71,10 @@ class TruPortalDoorConfig(BaseModel):
     name: str = Field(description="what a tenant should see, e.g. 'Front entrance'")
     zones: list[str] = Field(
         default_factory=lambda: ["*"],
-        description="zones whose tenants may unlock it. '*' means any tenant -- correct "
-        "for a shared entrance, wrong for a door into one suite.",
+        description="zones whose tenants may unlock it. '*' means any tenant, which is "
+        "correct for a shared entrance and wrong for a door into one suite. An empty "
+        "list means no tenant may -- managers and admins are never zone-scoped, so the "
+        "door stays available to them.",
     )
 
 

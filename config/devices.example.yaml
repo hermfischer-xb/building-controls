@@ -68,3 +68,22 @@ devices:
   #   address: 192.168.1.10:47809
   #   name: Simulated zone
   #   zone: lab
+
+# Interlogix TruPortal access panel, if one is fitted. Doors and lighting relays.
+# Credentials sit in this file, so keep it readable only by the service account:
+#   chmod 600 config/devices.yaml
+truportal:
+  enabled: false
+  host: 192.168.1.50
+  username: bms-service
+  password: "change-me"
+  doors:
+    # zones: ["*"] means any tenant may open it -- right for a shared entrance,
+    # wrong for a door into one suite. An empty list means no tenant may, which
+    # still leaves it available to managers and admins.
+    - {id: 21, name: "Front entrance", zones: ["*"]}
+  lighting_triggers:
+    # role is mapped explicitly rather than inferred from the action's name, so
+    # renaming an action on the panel cannot hand tenants a long-duration one.
+    - {id: 6,  zone: floor-2, role: tenant}
+    - {id: 12, zone: "*",     role: manager}

@@ -34,6 +34,7 @@ from .poller import Poller
 from .schedules import DAYS, DEFAULT_GROUPS, resolve_week, validate_transitions, week_summary
 from .reconciler import Reconciler
 from .store import Store
+from .truportal import TruPortal, TruPortalError
 from .zones import Zones
 from .tenant_page import render as render_tenant
 from .tenant_page import render_login
@@ -128,9 +129,13 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         await client.start()
         await poller.start()
         await reconciler.start(cfg.reconcile_interval_seconds)
+        if truportal is not None:
+            await truportal.start()
         try:
             yield
         finally:
+            if truportal is not None:
+                await truportal.stop()
             await reconciler.stop()
             await poller.stop()
             await client.stop()
@@ -144,6 +149,12 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     origin = cfg.public_origin.rstrip("/")
     rp_id = origin.split("://", 1)[-1].split("/")[0].split(":")[0] if origin else ""
     passkeys = Passkeys(store, rp_id=rp_id, rp_name="16400 Ventura", origin=origin)
+
+    tp_cfg = cfg.truportal
+    truportal = (
+        TruPortal(tp_cfg.host, tp_cfg.username, tp_cfg.password, verify_tls=tp_cfg.verify_tls)
+        if tp_cfg.enabled and tp_cfg.host else None
+    )
 
     def _device(device_id: int):
         for d in cfg.devices:
@@ -399,12 +410,30 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
         device = require_device(device_id, user)
         state = cache.get(device_id)
+        doors = [{"id": d.id, "name": d.name} for d in _visible_doors(user)] if truportal else []
+
+        # Durations come from the panel, so a button cannot advertise a period
+        # the hardware is not set to. A panel that is unreachable simply means no
+        # lighting buttons rather than a broken page.
+        lighting = []
+        if truportal is not None:
+            try:
+                by_id = {t.id: t for t in (await truportal.inventory())["triggers"]}
+                for cfg_t in _visible_triggers(user):
+                    dev = by_id.get(cfg_t.id)
+                    if dev:
+                        lighting.append({"id": cfg_t.id, "duration": dev.duration_text})
+            except TruPortalError as err:
+                log.warning("could not read lighting actions for the tenant page: %s", err)
+
         return HTMLResponse(render_tenant(
             device_id,
             device.name,
             state.to_dict(cfg.poll_interval_seconds * 3) if state else {},
             passkeys_available=passkeys.configured,
             has_passkey=passkeys.has_passkey(user.id) if passkeys.configured else False,
+            doors=doors,
+            lighting=lighting,
         ))
 
     @app.get("/robots.txt", include_in_schema=False)
@@ -694,6 +723,163 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     async def audit(limit: int = 100,
                     user: User = Depends(require("manager"))) -> list[dict[str, Any]]:
         return store.recent_audit(limit)
+
+    # --- doors and lighting -----------------------------------------------------
+
+    def _door(door_id: int, user: User):
+        """Resolve a configured door and check this user may open it.
+
+        Managers and admins are never zone-scoped. A tenant needs the door to
+        list '*' or one of their zones; an empty list therefore means
+        manager-only, which is how the unused test door is kept off the tenant
+        page while staying available for verification.
+        """
+        door = next((d for d in cfg.truportal.doors if d.id == door_id), None)
+        if door is None:
+            raise HTTPException(404, f"no door {door_id}")
+        if user.at_least("manager"):
+            return door
+        if "*" in door.zones or any(z in door.zones for z in user.zones):
+            return door
+        raise HTTPException(404, f"no door {door_id}")
+
+    def _visible_doors(user: User) -> list:
+        out = []
+        for d in cfg.truportal.doors:
+            if user.at_least("manager") or "*" in d.zones or any(z in d.zones for z in user.zones):
+                out.append(d)
+        return out
+
+    def _visible_triggers(user: User) -> list:
+        out = []
+        for t in cfg.truportal.lighting_triggers:
+            if not user.at_least(t.role):
+                continue
+            # A tenant only gets the action for a zone they hold; managers get
+            # everything, including the building-wide maintenance action.
+            if user.at_least("manager") or t.zone == "*" or t.zone in user.zones:
+                out.append(t)
+        return out
+
+    async def _fire_zone_lights(user: User) -> str | None:
+        """Turn on the lights for a tenant's own floor, best effort.
+
+        Called alongside a door unlock, because someone arriving after hours
+        needs the door *and* the corridor. Never fails the unlock: standing
+        outside in the dark is better than standing outside a locked door.
+        """
+        for t in cfg.truportal.lighting_triggers:
+            if t.role != "tenant" or t.zone == "*":
+                continue
+            if t.zone in user.zones or user.at_least("manager"):
+                try:
+                    await truportal.execute_trigger(t.id)
+                    return t.zone
+                except TruPortalError as err:
+                    log.warning("could not light %s after unlock: %s", t.zone, err)
+                return None
+        return None
+
+    def _require_truportal():
+        if truportal is None:
+            raise HTTPException(503, "access control is not configured")
+
+    @app.get("/doors")
+    async def list_doors(user: User = Depends(current_user)) -> dict[str, Any]:
+        _require_truportal()
+        return {
+            "doors": [
+                {"id": d.id, "name": d.name} for d in _visible_doors(user)
+            ],
+            "verification_required": passkeys.configured,
+        }
+
+    @app.post("/doors/{door_id}/unlock")
+    async def unlock_door(door_id: int, user: User = Depends(current_user)) -> dict[str, Any]:
+        """Momentary unlock — the panel relocks it after its own grant time.
+
+        Gated behind a passkey assertion because this physically opens a
+        building. Everything else here can be undone; a door that opened cannot.
+        """
+        _require_truportal()
+        door = _door(door_id, user)
+        require_recent_verification(user)
+
+        try:
+            await truportal.grant_access(door.id)
+        except TruPortalError as err:
+            store.log(user.username, "door.unlock", door.name, {"error": str(err)},
+                      outcome="error")
+            raise HTTPException(503, f"could not reach the door controller: {err}") from err
+
+        store.log(user.username, "door.unlock", door.name, {"door_id": door.id})
+        lit = await _fire_zone_lights(user)
+        return {"door": door.name, "unlocked": True, "lights": lit}
+
+    @app.get("/lighting")
+    async def list_lighting(user: User = Depends(current_user)) -> dict[str, Any]:
+        _require_truportal()
+        try:
+            inventory = await truportal.inventory()
+        except TruPortalError as err:
+            raise HTTPException(503, str(err)) from err
+
+        by_id = {t.id: t for t in inventory["triggers"]}
+        out = []
+        for cfg_t in _visible_triggers(user):
+            device = by_id.get(cfg_t.id)
+            if device is None:
+                log.warning("configured lighting trigger %s is not on the panel", cfg_t.id)
+                continue
+            out.append({
+                "id": cfg_t.id,
+                "name": device.name,
+                # From the panel, so a button can never advertise a duration the
+                # hardware is not actually set to.
+                "duration": device.duration_text,
+                "zone": cfg_t.zone,
+                "role": cfg_t.role,
+                "self_firing": device.self_firing,
+            })
+        return {"actions": out}
+
+    @app.post("/lighting/{trigger_id}")
+    async def fire_lighting(trigger_id: int, user: User = Depends(current_user)) -> dict[str, Any]:
+        _require_truportal()
+        allowed = {t.id for t in _visible_triggers(user)}
+        if trigger_id not in allowed:
+            raise HTTPException(404, f"no lighting action {trigger_id}")
+        try:
+            await truportal.execute_trigger(trigger_id)
+        except TruPortalError as err:
+            raise HTTPException(503, str(err)) from err
+        store.log(user.username, "lighting.on", str(trigger_id))
+        return {"triggered": trigger_id}
+
+    @app.get("/access/status")
+    async def access_status(user: User = Depends(require("manager"))) -> dict[str, Any]:
+        _require_truportal()
+        try:
+            status = await truportal.status()
+            inventory = await truportal.inventory()
+        except TruPortalError as err:
+            raise HTTPException(503, str(err)) from err
+
+        names = {d.id: d.name for d in inventory["doors"]}
+        out_names = {o.id: o.name for o in inventory["outputs"]}
+        return {
+            "doors": [
+                {"id": i, "name": names.get(i, str(i)),
+                 "contact": s.get("contactStatus"), "held": s.get("heldAlarm"),
+                 "forced": s.get("forcedAlarm"), "online": s.get("online")}
+                for i, s in sorted(status.doors.items())
+            ],
+            "outputs": [
+                {"id": i, "name": out_names.get(i, str(i)), "on": bool(v)}
+                for i, v in sorted(status.outputs.items())
+                if i in out_names
+            ],
+        }
 
     # --- zones ------------------------------------------------------------------
 
