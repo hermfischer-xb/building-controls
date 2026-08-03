@@ -82,6 +82,11 @@ truportal:
     # wrong for a door into one suite. An empty list means no tenant may, which
     # still leaves it available to managers and admins.
     - {id: 21, name: "Front entrance", zones: ["*"]}
+  # Check what these contactors actually switch before exposing one to tenants.
+  # At 16400 Ventura the corridor's corner and mid-span lamps are on a separate
+  # always-on circuit, so switching a trigger off leaves the floor dim rather
+  # than dark. A trigger that can darken an egress path does not belong on the
+  # tenant page.
   lighting_triggers:
     # role is mapped explicitly rather than inferred from the action's name, so
     # renaming an action on the panel cannot hand tenants a long-duration one.

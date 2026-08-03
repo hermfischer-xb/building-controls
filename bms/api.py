@@ -770,17 +770,29 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         Called alongside a door unlock, because someone arriving after hours
         needs the door *and* the corridor. Never fails the unlock: standing
         outside in the dark is better than standing outside a locked door.
+
+        Strictly the caller's own zone. This also matched `at_least("manager")`
+        once, which meant every privileged unlock fired whichever tenant trigger
+        was configured first -- floor-2, for any door in the building. There is
+        no way to infer the right floor for someone who is not zone-scoped: a
+        door records who may use it, not where it is. So they get the explicit
+        button rather than an arbitrary guess, and the corridors keep their
+        always-on corner lamps regardless.
         """
         for t in cfg.truportal.lighting_triggers:
-            if t.role != "tenant" or t.zone == "*":
+            if t.role != "tenant" or t.zone == "*" or t.zone not in user.zones:
                 continue
-            if t.zone in user.zones or user.at_least("manager"):
-                try:
-                    await truportal.execute_trigger(t.id)
-                    return t.zone
-                except TruPortalError as err:
-                    log.warning("could not light %s after unlock: %s", t.zone, err)
+            try:
+                await truportal.execute_trigger(t.id)
+            except TruPortalError as err:
+                log.warning("could not light %s after unlock: %s", t.zone, err)
                 return None
+            # Audited like any other physical act. Being a side effect rather
+            # than a button press is exactly why it needs its own record --
+            # otherwise the lights come on with nothing to say who or why.
+            store.log(user.username, "lighting.on", t.zone,
+                      {"trigger_id": t.id, "via": "door.unlock"})
+            return t.zone
         return None
 
     def _require_truportal():
@@ -849,14 +861,17 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     @app.post("/lighting/{trigger_id}")
     async def fire_lighting(trigger_id: int, user: User = Depends(current_user)) -> dict[str, Any]:
         _require_truportal()
-        allowed = {t.id for t in _visible_triggers(user)}
-        if trigger_id not in allowed:
+        trigger = next((t for t in _visible_triggers(user) if t.id == trigger_id), None)
+        if trigger is None:
             raise HTTPException(404, f"no lighting action {trigger_id}")
         try:
             await truportal.execute_trigger(trigger_id)
         except TruPortalError as err:
             raise HTTPException(503, str(err)) from err
-        store.log(user.username, "lighting.on", str(trigger_id))
+        # Zone as the target, id in the detail, matching door.unlock. A log line
+        # reading "lighting.on 7" makes a reader go and find the config to learn
+        # what lit up.
+        store.log(user.username, "lighting.on", trigger.zone, {"trigger_id": trigger_id})
         return {"triggered": trigger_id}
 
     @app.get("/access/status")
