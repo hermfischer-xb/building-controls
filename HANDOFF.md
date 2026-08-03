@@ -1,12 +1,24 @@
 # Handoff: laptop session → mini, 2026-08-03
 
-Four commits pushed from the laptop since `6a5cdde` (the last thing the mini
-pushed). None of it has run on the mini. **The gateway there is still running a
-process that predates all of it**, including `6a5cdde` itself.
+Eight commits pushed from the laptop since `6a5cdde` (the last thing the mini
+pushed).
 
-    git pull --ff-only
-    sudo launchctl kickstart -k system/com.building-controls.gateway
-    curl -s localhost:8237/health
+**State of the mini as of the last exchange:**
+
+- Repo pulled — it is at `fbb1927` or later.
+- Backup job installed, bootstrapped and verified: `last exit code = 0`, log
+  written, first snapshot in `/usr/local/var/backups/building-controls`.
+- **The gateway has NOT been restarted.** It is still running a process that
+  predates `6a5cdde`, so none of the code below is live yet. Until this runs, the
+  dashboard has no door buttons and the verification window is still 120s:
+
+```bash
+sudo launchctl kickstart -k system/com.building-controls.gateway
+curl -sS localhost:8237/health
+```
+
+The `code version` line in a backup log is the *repo's* SHA, not the running
+process's — do not read it as proof the gateway restarted.
 
 ---
 
@@ -70,9 +82,35 @@ arbitrarily slow walk, but would also let someone who took the phone inside the
 window hold it open indefinitely by opening a door every minute. Do not "improve"
 this into a sliding window.
 
-### `HEAD` — bulk load and backups
+### `110d0f2` — bulk CSV loading, backups, this document
 
 See the two sections below.
+
+### `ec6054a` `18baa3f` — installing the launchd jobs
+
+Both driven by a real failure on the mini; see *Resolved* below. The install
+procedure changed: **the plists are now substituted with `sed`, not hand-edited.**
+Anything you remember about editing `CHANGEME` by hand is superseded by *Install
+the launchd jobs* in `deploy/DEPLOY.md`.
+
+### `aac1412` — each backup is one standalone file
+
+The first real run left `bms.db-wal` and `bms.db-shm` in the backup directory,
+beside a `RESTORE` file warning that stray WAL files corrupt databases. No data
+was at risk — the `-wal` was empty and `bms.db` verified complete without it —
+but shipping the files your own instructions warn about is a trap for whoever is
+restoring under pressure. The copy is now collapsed with `journal_mode=DELETE`,
+**against the copy, never the source**: switching the live database's journal
+mode would take a write lock on the gateway mid-poll.
+
+`integrity_check` runs *after* the collapse, so what is verified is the artifact
+that would actually be restored.
+
+### `fbb1927` — what the backup does not cover
+
+Same disk as the data. Covers a bad edit, a botched upgrade, a corrupt database,
+"what did the schedule look like last week". Does not cover the disk failing or
+the machine being stolen.
 
 ---
 
@@ -120,13 +158,16 @@ empty page — the account was fine, the zone name did not match anything.
 
 ## Backups
 
-    deploy/backup.sh                       # → /usr/local/var/backups/building-controls
-    sudo cp deploy/com.building-controls.backup.plist /Library/LaunchDaemons/
-    sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.backup.plist
+**Already installed and working on the mini** — nightly at 03:15, 30 kept. To run
+one by hand, or to a different destination:
 
-Nightly at 03:15, 30 kept. Backs up the database, `config/devices.yaml`, the
-gateway plist, and the git SHA that was running. Everything else on the machine
-comes back from `git clone` and `pip install`.
+    deploy/backup.sh                       # → /usr/local/var/backups/building-controls
+    deploy/backup.sh ~/backup-test         # anywhere this account can write
+
+Backs up the database, `config/devices.yaml`, the gateway plist, and the git SHA
+that was running. Everything else on the machine comes back from `git clone` and
+`pip install`. Each backup directory holds exactly one database file, complete
+and standalone.
 
 **The gateway does not need to be stopped.** It uses `sqlite3 .backup`, which
 snapshots a live database consistently. This is not a stylistic preference —
@@ -141,7 +182,14 @@ only deletes directories containing a `RESTORE` file, so a mistyped destination
 cannot `rm -rf` something the script did not create. Written for bash 3.2, which
 is what macOS ships; no `mapfile`, no arrays.
 
-Restore steps are written into every backup directory as `RESTORE`.
+Restore steps are written into every backup directory as `RESTORE`. A restore was
+tested on the laptop, not merely read: the copy opened through `bms.store.Store`
+with accounts and zones intact, 4 schedule groups, 10 holiday rules, 594 audit
+entries, and it accepted writes.
+
+Not disaster recovery — see `fbb1927` above. Pointing Time Machine or an `rsync`
+at the destination would close that, remembering it carries password hashes and
+the access panel's credentials.
 
 ---
 
@@ -198,6 +246,11 @@ The mini's repo is at `/Users/Shared/building-controls` — outside TCC, per the
 
 ## Still open, in priority order
 
+0. **Restart the gateway** (top of this document). Everything under *What
+   changed* is inert until then, including the reported missing door buttons.
+   Then confirm on a phone that `/` shows them for both accounts — that fix has
+   only ever been tested against a stubbed panel, never real hardware.
+
 1. **Cloudflare dashboard.** Access on `/ui/*`, a rate-limit rule on `/login`,
    SSL Full (strict). Certificate Transparency publishes every hostname that gets
    a certificate, so scanners find these within hours — and door unlock is now
@@ -224,4 +277,18 @@ The mini's repo is at `/Users/Shared/building-controls` — outside TCC, per the
   example in a config comment and I repeated it as fact, which cost Herm a trip
   through a test that could never have passed.
 - **NAT loopback was a red herring** I asserted as a "strongest suspicion" on no
-  evidence. The launchd failure was log file ownership.
+  evidence. That earlier gateway failure was log file ownership.
+- **The repo on the mini is at `/Users/Shared/building-controls`**, not under a
+  home directory. I have assumed otherwise more than once.
+- Shipping install steps that omit a prerequisite is the recurring theme in all
+  of the above: the log directory for the gateway, then the log directory *again*
+  for the backup, then the placeholder substitution. When adding a launchd job,
+  write the `mkdir`/`chown`/`sed` into the documented procedure rather than
+  trusting whoever runs it to remember.
+
+## How to keep this document honest
+
+It has been wrong twice by drifting rather than by being incorrect when written:
+a commit count that stopped matching, and a "nothing has run on the mini" that
+stayed after things had. If you push from the mini, update the header block —
+commit count, and which of the two machines is actually running what.

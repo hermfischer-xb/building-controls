@@ -214,8 +214,11 @@ deploy/backup.sh                    # -> /usr/local/var/backups/building-control
 ```
 
 Database, config, plist, and the git SHA that was running; 30 kept; restore
-instructions written into every backup directory. Install
-`deploy/com.building-controls.backup.plist` to run it nightly.
+instructions written into every backup directory, and each one holds a single
+standalone database file. To run it nightly, see *Install the launchd jobs* in
+[deploy/DEPLOY.md](deploy/DEPLOY.md) — the plists carry `CHANGEME` placeholders
+that are substituted at install time, and a job installed unedited fails before
+it can write a log explaining why.
 
 This protects against a bad edit, a botched upgrade, a corrupted database, and
 "what did the schedule look like last week". It does **not** protect against the
