@@ -1,9 +1,13 @@
-PyYAML==6.0.3
+# Direct dependencies only. Transitive ones are deliberately left unpinned so pip
+# can pick a version with a prebuilt wheel for the platform in hand -- pinning
+# cryptography exactly forced a source build on a machine whose Python had no
+# matching wheel, which needs a Rust toolchain nobody wants on a building
+# controller.
 bacpypes3==0.0.106
-cryptography==50.0.0
 fastapi==0.141.1
-httpx==0.28.1
-pydantic==2.13.4
-python-multipart==0.0.32
 uvicorn==0.52.0
+pydantic==2.13.4
+PyYAML==6.0.3
+python-multipart==0.0.32
+httpx==0.28.1
 webauthn==3.0.0

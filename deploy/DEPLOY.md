@@ -66,12 +66,20 @@ cd /Users/Shared            # not ~, and never ~/Documents -- see below
 git clone https://github.com/hermfischer-xb/building-controls.git
 cd building-controls
 python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip     # before anything else
 .venv/bin/python -m pip install -r requirements.txt
 cp config/devices.example.yaml config/devices.yaml
 ```
 
 Three things are deliberately **not** in git and must be created here:
 `config/devices.yaml`, `data/bms.db`, and `.venv`.
+
+**Upgrade pip first.** A pip too old to recognise current wheel tags falls back
+to building from source, and `cryptography` then demands a Rust toolchain. The
+error names Rust and looks like a missing compiler; the actual cause is almost
+always stale pip. If it persists after upgrading, report `python3 -V` and
+`pip -V` -- it means no wheel exists for that interpreter, and the fix is a
+different Python, not a compiler.
 
 **Not under `~/Documents`, or any TCC-protected folder.** Desktop, Documents and
 Downloads all require user consent to read. A LaunchDaemon has no GUI session in
