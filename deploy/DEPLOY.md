@@ -185,12 +185,23 @@ sudo sysadminctl -addUser _bms -fullName "Building Controls" \
      -home /var/empty -shell /usr/bin/false
 sudo dscl . -create /Users/_bms IsHidden 1
 sudo chown -R _bms /Users/Shared/building-controls
+sudo chown _bms /usr/local/var/log/building-controls.log   # NOT under the repo
 ```
+
+That last line is the one everybody forgets. `chown -R` over the repo cannot
+reach the log, because `StandardOutPath` points outside it -- and launchd opens
+that file **as the daemon's user, before exec**. Get it wrong and the service
+never starts, with no traceback anywhere, because the only place the error could
+be written is the file it cannot open. Whenever `UserName` changes, three things
+follow it: `data/`, `config/devices.yaml`, and the log.
 
 Set `UserName` to `_bms` in the plist and re-bootstrap. Note it will need the
 Local Network Privacy grant again -- that is per identity, and granting it for
 an account with no GUI session is the fiddly part, so do it when you can
 iterate rather than immediately before you need the system working.
+
+Reverting is the same trap in reverse. `sudo chown -R hermf:staff .` inside the
+repo looks complete and leaves the log still owned by the account you abandoned.
 
 Confirm it polls a thermostat, then Ctrl-C. **A healthy poll logs nothing at
 all** — the poll loop has no logging statements, by design. Silence is success;
@@ -224,6 +235,29 @@ looks identical to a check that printed nothing.
 
 A **Daemon**, not an Agent — agents wait for a login, so after an unattended
 reboot the building would have no controller until someone sat down at it.
+
+### If it will not start and there is no traceback
+
+```
+Bootstrap failed: 5: Input/output error
+```
+
+with `sudo launchctl print system/com.building-controls.gateway` showing `state
+= spawn scheduled` and `active count = 0`, and **nothing new in the log**, means
+launchd could not open `StandardOutPath`/`StandardErrorPath` as the account in
+`UserName`. Python never ran. Check it directly:
+
+```bash
+ls -l /usr/local/var/log/building-controls.log   # owner must match UserName
+```
+
+The absence of a traceback is the diagnostic signal, not a dead end: the error's
+only destination is the file it cannot open. `kickstart -k` and `bootout` +
+`bootstrap` both fail the same way, because neither touches the cause.
+
+Note that **running it in the foreground will succeed and prove nothing** -- a
+foreground run writes to your terminal and never opens `StandardOutPath` at all.
+This failure exists only under launchd.
 
 ### If it starts but no device ever answers
 
