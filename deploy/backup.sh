@@ -55,8 +55,20 @@ if [ -f "$DB" ]; then
   # target exists, and .backup is the one that has been in sqlite3 for decades.
   sqlite3 "$DB" ".backup '$OUT/bms.db'" || fail "sqlite3 .backup on $DB"
 
-  # A backup nobody checked is a guess. Verify the copy opens and its schema is
-  # intact before this run is allowed to count as a success.
+  # The copy inherits WAL mode from the source, so sqlite3 leaves a -wal and a
+  # -shm beside it. They are empty and the data is all in bms.db -- but a backup
+  # directory containing files that RESTORE tells you to be wary of is a trap
+  # laid for whoever is doing this under pressure at 3am. Collapse the copy to a
+  # single file so there is exactly one thing to restore and no decision to make.
+  #
+  # This runs against the COPY, never the source: switching the live database's
+  # journal mode would take a write lock on the gateway mid-poll.
+  sqlite3 "$OUT/bms.db" "PRAGMA journal_mode=DELETE;" >/dev/null \
+    || fail "could not collapse the WAL into $OUT/bms.db"
+  rm -f "$OUT/bms.db-wal" "$OUT/bms.db-shm"
+
+  # A backup nobody checked is a guess. Verified after the collapse above, so
+  # what is checked is the artifact that will actually be restored.
   sqlite3 "$OUT/bms.db" "PRAGMA integrity_check;" | grep -qx ok \
     || fail "the copied database did not pass integrity_check"
   users=$(sqlite3 "$OUT/bms.db" "SELECT COUNT(*) FROM app_user;")
@@ -100,14 +112,18 @@ Restore
 2. Put the code back to the commit this backup was taken from (see VERSION):
      git -C <repo> checkout <sha>
 
-3. Copy the files back:
-     cp bms.db      <repo>/data/bms.db
-     cp devices.yaml <repo>/config/devices.yaml
-     chmod 600      <repo>/config/devices.yaml
+3. Delete the old database and BOTH of its sidecar files, then copy back:
 
-   Delete any stale bms.db-wal and bms.db-shm beside the old database first.
-   They belong to the database they were written with, and a leftover WAL from a
-   different file is how a good backup turns into a corrupt one.
+     rm  <repo>/data/bms.db <repo>/data/bms.db-wal <repo>/data/bms.db-shm
+     cp bms.db       <repo>/data/bms.db
+     cp devices.yaml <repo>/config/devices.yaml
+     chmod 600       <repo>/config/devices.yaml
+
+   The rm matters. A bms.db-wal left over from the database you are replacing
+   belongs to a different file, and SQLite will try to apply it to this one --
+   which is how a good backup turns into a corrupt database. This backup contains
+   no -wal or -shm of its own, by design: bms.db here is complete and standalone,
+   so there is exactly one file to copy.
 
 4. Start it:
      sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.gateway.plist
