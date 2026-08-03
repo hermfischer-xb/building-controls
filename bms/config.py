@@ -103,6 +103,13 @@ class Config(BaseModel):
         default=30.0, ge=1.0, description="resync once a device clock is this far out"
     )
     reconcile_interval_seconds: float = Field(default=300.0, ge=10.0)
+    public_origin: str = Field(
+        default="",
+        description="the exact https origin users reach this on, e.g. "
+        "'https://controls.16400ventura.com'. WebAuthn binds credentials to it, so a "
+        "mismatch makes every passkey fail. Empty disables passkeys entirely, which is "
+        "correct on plain HTTP -- browsers refuse the API outside a secure context.",
+    )
     outdoor_weather: OutdoorWeatherConfig = Field(default_factory=OutdoorWeatherConfig)
     outdoor_sensor_device_id: int | None = Field(
         default=None,

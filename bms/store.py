@@ -168,6 +168,35 @@ CREATE TABLE IF NOT EXISTS session (
 
 CREATE INDEX IF NOT EXISTS idx_session_user ON session (user_id);
 
+-- Passkeys, for step-up verification on actions that open a door.
+--
+-- Registered per device, not per person: someone with a phone and a tablet
+-- enrols both, and losing one revokes only that one.
+--
+-- sign_count is the authenticator's own counter. It must never go backwards --
+-- a replayed assertion carries a stale count, which is the one cheap signal
+-- that a credential has been cloned.
+CREATE TABLE IF NOT EXISTS webauthn_credential (
+    credential_id TEXT    PRIMARY KEY,          -- base64url, as the browser sends it
+    user_id       INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    public_key    BLOB    NOT NULL,
+    sign_count    INTEGER NOT NULL DEFAULT 0,
+    label         TEXT    NOT NULL DEFAULT '',  -- "Herm's iPhone"
+    created_at    REAL    NOT NULL,
+    last_used_at  REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credential (user_id);
+
+-- Challenges are single-use and short-lived. Kept server-side rather than in a
+-- cookie so a replayed one cannot be resurrected by the client that saw it.
+CREATE TABLE IF NOT EXISTS webauthn_challenge (
+    challenge  TEXT    PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    purpose    TEXT    NOT NULL CHECK (purpose IN ('register','authenticate')),
+    expires_at REAL    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     ts       REAL NOT NULL,

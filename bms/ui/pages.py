@@ -888,3 +888,87 @@ function createZone(){{
 </script>
 """
     return page("Zones", user, body, active="/ui/zones")
+
+
+# --- passkeys ----------------------------------------------------------------
+
+
+def security_page(user, credentials: list[dict], available: bool, reason: str = "") -> str:
+    """Enrol and manage the devices allowed to unlock doors.
+
+    Separate from the Users page because this is about *your own* devices --
+    nobody, including an admin, can enrol a passkey on someone else's behalf. The
+    private key never leaves the phone, which is the property that makes it worth
+    having.
+    """
+    if not available:
+        body = f"""
+<h1>Security</h1>
+<div class="card">
+ <p><strong>Passkeys are unavailable here.</strong></p>
+ <p class="sub">{e(reason or 'requires https on a real hostname')}. Browsers refuse
+    the WebAuthn API outside a secure context, so this cannot be enabled on plain
+    HTTP or a bare IP address. Set <code>public_origin</code> once the site is
+    reachable over https.</p>
+</div>"""
+        return page("Security", user, body, active="/ui/security")
+
+    rows = "".join(
+        f"""<tr>
+ <td>{e(c['label'])}<div class="sub">{e(c['credential_id'][:20])}…</div></td>
+ <td class="sub">{e(dt.datetime.fromtimestamp(c['created_at']).strftime('%d %b %Y'))}</td>
+ <td class="sub">{e(dt.datetime.fromtimestamp(c['last_used_at']).strftime('%d %b %H:%M')
+                    if c.get('last_used_at') else 'never')}</td>
+ <td><button class="danger" onclick="removePasskey('{e(c['credential_id'])}')">Remove</button></td>
+</tr>"""
+        for c in credentials
+    )
+
+    body = f"""
+<h1>Security</h1>
+<p class="lede">Devices registered to confirm it is really you before a door
+opens. Face ID on an iPhone, fingerprint or face on Android.</p>
+
+<div class="card">
+ <p class="sub">A signed-in session proves you logged in once — possibly weeks
+    ago. Unlocking an exterior door deserves a stronger check than that, and this
+    is the one that also survives a phone being stolen while unlocked.
+    The biometric never leaves the device and this server never sees it.</p>
+ <div class="row" style="margin-top:1rem">
+  <div><label for="pklabel">Name this device</label>
+   <input id="pklabel" placeholder="Herm's iPhone" maxlength="60"></div>
+  <button class="primary" onclick="addPasskey()">Register this device</button>
+ </div>
+ <p class="sub" id="pkhint" style="margin-top:.6rem"></p>
+</div>
+
+<div class="card"><div class="wrap"><table>
+ <tr><th>Device</th><th>Registered</th><th>Last used</th><th></th></tr>
+ {rows or '<tr><td colspan="4" class="empty">No devices registered yet.</td></tr>'}
+</table></div>
+<p class="sub">Register each device you would use — a phone and a tablet are
+   separate. Removing one revokes only that device.</p></div>
+
+<script>
+if (!passkeySupported()) {{
+  document.getElementById('pkhint').textContent =
+    'This browser cannot use passkeys. Try Safari on iOS or Chrome on Android.';
+}}
+async function addPasskey(){{
+  const label = document.getElementById('pklabel').value.trim() || 'phone';
+  try {{
+    await passkeyRegister(label);
+    toast('Device registered', true);
+    setTimeout(() => location.reload(), 800);
+  }} catch (err) {{
+    // A cancelled Face ID prompt is a NotAllowedError, not a failure worth alarm.
+    toast(/NotAllowed|abort/i.test(err.name + err.message)
+          ? 'Cancelled' : (err.message || 'Could not register'), false);
+  }}
+}}
+function removePasskey(id){{
+  act('DELETE', '/passkeys/' + encodeURIComponent(id), null, 'Device removed');
+}}
+</script>
+"""
+    return page("Security", user, body, active="/ui/security")

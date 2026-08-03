@@ -1,7 +1,9 @@
 PyYAML==6.0.3
 bacpypes3==0.0.106
+cryptography==50.0.0
 fastapi==0.141.1
 httpx==0.28.1
 pydantic==2.13.4
 python-multipart==0.0.32
 uvicorn==0.52.0
+webauthn==3.0.0

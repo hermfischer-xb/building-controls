@@ -29,6 +29,7 @@ def build_router(
     reconciler,
     client,
     zones,
+    passkeys,
     require_device: Callable[[int, Any], Any],
 ) -> APIRouter:
     router = APIRouter(include_in_schema=False)
@@ -97,6 +98,18 @@ def build_router(
                 outdoor=reconciler.outdoor,
             )
         )
+
+    @router.get("/ui/security", response_class=HTMLResponse)
+    async def security(request: Request):
+        user = visitor(request)
+        if user is None:
+            return signin(request)
+        creds = [
+            {"credential_id": c.credential_id, "label": c.label,
+             "created_at": c.created_at, "last_used_at": c.last_used_at}
+            for c in (passkeys.credentials_for(user.id) if passkeys.configured else [])
+        ]
+        return HTMLResponse(pages.security_page(user, creds, passkeys.configured))
 
     @router.get("/ui/zones", response_class=HTMLResponse)
     async def zones_page(request: Request):

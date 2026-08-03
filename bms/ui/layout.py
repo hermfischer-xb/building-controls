@@ -20,6 +20,8 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+from ..passkey_js import PASSKEY_JS
+
 # Kept in one place so the operator UI, the login form and the tenant page stay
 # visually consistent without a CSS build.
 CSS = """
@@ -126,6 +128,7 @@ async function act(method, path, body, okMsg, reload){
 
 NAV = (
     ("/", "Dashboard", "tenant"),
+    ("/ui/security", "Security", "tenant"),
     ("/ui/zones", "Zones", "manager"),
     ("/ui/schedules", "Schedules", "manager"),
     ("/ui/holidays", "Holidays", "manager"),
@@ -282,5 +285,5 @@ def page(title: str, user: Any, body: str, active: str = "") -> str:
 </div></header>
 <main>{body}</main>
 <div id="toast"></div>
-<script>{JS}</script>
+<script>{JS}{PASSKEY_JS}</script>
 """

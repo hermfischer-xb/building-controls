@@ -12,6 +12,7 @@ layer in front of it.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -27,6 +28,7 @@ from .bacnet import BacnetClient, DeviceUnreachable
 from .cache import Cache
 from .config import Config
 from .holidays import US_FEDERAL_DEFAULTS, describe, occurrences
+from .passkeys import VERIFICATION_WINDOW_SECONDS, PasskeyError, Passkeys
 from .points import BY_KEY, POINTS, SETPOINT_LIMITS, OccupancyState
 from .poller import Poller
 from .schedules import DAYS, DEFAULT_GROUPS, resolve_week, validate_transitions, week_summary
@@ -84,6 +86,15 @@ class ZonesRequest(BaseModel):
     zones: list[str]
 
 
+class PasskeyRegisterRequest(BaseModel):
+    credential: dict = Field(description="the browser's PublicKeyCredential, plus _challenge")
+    label: str = Field(default="phone", max_length=60)
+
+
+class PasskeyVerifyRequest(BaseModel):
+    credential: dict
+
+
 class ZoneRequest(BaseModel):
     zone: str = Field(min_length=1, description="zone name; free text, picked from existing")
 
@@ -128,6 +139,11 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     app = FastAPI(title="BMS Gateway", version="0.1.0", lifespan=lifespan)
     auth = AuthStore(store)
     throttle = LoginThrottle()
+    # RP ID is the bare hostname of the public origin; the origin itself must
+    # match exactly, scheme and all, or every assertion fails.
+    origin = cfg.public_origin.rstrip("/")
+    rp_id = origin.split("://", 1)[-1].split("/")[0].split(":")[0] if origin else ""
+    passkeys = Passkeys(store, rp_id=rp_id, rp_name="16400 Ventura", origin=origin)
 
     def _device(device_id: int):
         for d in cfg.devices:
@@ -273,7 +289,99 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
     @app.get("/me")
     async def me(user: User = Depends(current_user)) -> dict[str, Any]:
-        return user.to_dict()
+        return {
+            **user.to_dict(),
+            "passkeys_available": passkeys.configured,
+            "has_passkey": passkeys.has_passkey(user.id) if passkeys.configured else False,
+        }
+
+    # --- passkeys ---------------------------------------------------------------
+    #
+    # Step-up verification for actions that open a door. A session proves someone
+    # logged in, possibly weeks ago; a passkey assertion proves a verified person
+    # is holding the device right now.
+
+    @app.get("/passkeys")
+    async def list_passkeys(user: User = Depends(current_user)) -> dict[str, Any]:
+        if not passkeys.configured:
+            return {"available": False, "reason": "requires https on a real hostname",
+                    "credentials": []}
+        return {
+            "available": True,
+            "credentials": [
+                {"credential_id": c.credential_id, "label": c.label,
+                 "created_at": c.created_at, "last_used_at": c.last_used_at}
+                for c in passkeys.credentials_for(user.id)
+            ],
+        }
+
+    @app.post("/passkeys/register/options")
+    async def passkey_register_options(user: User = Depends(current_user)) -> Any:
+        if not passkeys.configured:
+            raise HTTPException(400, "passkeys require https on a real hostname")
+        return json.loads(
+            passkeys.registration_options(user.id, user.username, user.display_name)
+        )
+
+    @app.post("/passkeys/register", status_code=201)
+    async def passkey_register(
+        body: PasskeyRegisterRequest, user: User = Depends(current_user)
+    ) -> dict[str, Any]:
+        try:
+            credential_id = passkeys.register(
+                user.id, body.credential, body.label, actor=user.username
+            )
+        except PasskeyError as err:
+            raise HTTPException(400, str(err)) from err
+        return {"credential_id": credential_id, "label": body.label}
+
+    @app.delete("/passkeys/{credential_id}")
+    async def passkey_delete(
+        credential_id: str, user: User = Depends(current_user)
+    ) -> dict[str, Any]:
+        if not passkeys.delete_credential(user.id, credential_id, actor=user.username):
+            raise HTTPException(404, "no such passkey on this account")
+        return {"deleted": credential_id}
+
+    @app.post("/passkeys/verify/options")
+    async def passkey_verify_options(user: User = Depends(current_user)) -> Any:
+        try:
+            return json.loads(passkeys.authentication_options(user.id))
+        except PasskeyError as err:
+            raise HTTPException(400, str(err)) from err
+
+    @app.post("/passkeys/verify")
+    async def passkey_verify(
+        body: PasskeyVerifyRequest, user: User = Depends(current_user)
+    ) -> dict[str, Any]:
+        try:
+            passkeys.verify(user.id, body.credential, actor=user.username)
+        except PasskeyError as err:
+            raise HTTPException(400, str(err)) from err
+        store.log(user.username, "passkey.verified")
+        return {"verified": True, "valid_for_seconds": VERIFICATION_WINDOW_SECONDS}
+
+    def require_recent_verification(user: User) -> None:
+        """Gate for anything that physically opens a door.
+
+        Skipped entirely when passkeys are unavailable -- on plain HTTP the
+        browser refuses the API, and refusing the action instead would mean the
+        feature simply never works rather than degrading.
+        """
+        if not passkeys.configured:
+            return
+        if not passkeys.has_passkey(user.id):
+            raise HTTPException(
+                403,
+                {"error": "no passkey registered", "code": "passkey_required",
+                 "detail": "Register this device before unlocking doors."},
+            )
+        if not passkeys.recently_verified(user.id):
+            raise HTTPException(
+                401,
+                {"error": "verification required", "code": "verify_required",
+                 "detail": "Confirm with Face ID or your fingerprint."},
+            )
 
     @app.get("/t/{device_id}", include_in_schema=False)
     async def tenant(request: Request, device_id: int):
@@ -781,7 +889,8 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
     # Mounted last so it can close over require_device and the running services.
     app.include_router(
-        build_ui_router(cfg, cache, store, auth, reconciler, client, zones, require_device)
+        build_ui_router(cfg, cache, store, auth, reconciler, client, zones, passkeys,
+                        require_device)
     )
 
     return app
