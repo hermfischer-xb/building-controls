@@ -21,6 +21,7 @@ import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import httpx  # noqa: E402
 
+from bms.auth import generate_password  # noqa: E402
 from bms.config import load  # noqa: E402
 from bms.api import create_app
 from bms.auth import AuthStore
@@ -32,7 +33,36 @@ def check(cond, label):
     ok, fail = ok + bool(cond), fail + (not cond)
     print(f"  {'ok  ' if cond else 'FAIL'} {label}")
 
+def readability_checks() -> None:
+    """The one-time password has to survive being read aloud and typed once.
+
+    A manager on Android reported capital I against lowercase l, and capital O
+    against zero, as indistinguishable in the page's font -- and 16 characters as
+    needlessly long for something used once. Both are properties worth pinning:
+    they regress the moment someone reaches for `string.ascii_letters` again.
+    """
+    from bms.auth import UNAMBIGUOUS_ALPHABET, generate_password
+
+    print("=== the one-time password is readable ===")
+    confusable = set("lI1oO0")
+    check(not (set(UNAMBIGUOUS_ALPHABET) & confusable),
+          "none of I l 1 O o 0 appear, so neither reported pair can occur")
+    check(len(UNAMBIGUOUS_ALPHABET) == 32,
+          f"32 characters, so 5 bits each (got {len(UNAMBIGUOUS_ALPHABET)})")
+
+    sample = [generate_password() for _ in range(2000)]
+    check(all(len(p) == 10 for p in sample), "10 characters by default, i.e. 50 bits")
+    check(not any(set(p) & confusable for p in sample),
+          "2,000 generated passwords contain no confusable character")
+    check(all(p.islower() or p.isalnum() for p in sample),
+          "no mixed case, so nobody has to say \"capital B\"")
+    # Long enough for hash_password, which refuses under 8.
+    check(len(sample[0]) >= 8, "still long enough for the password hasher to accept")
+
+
 async def main():
+    readability_checks()
+    print()
     db = pathlib.Path(tempfile.mkdtemp()) / "t.db"
     app = create_app(load("config/devices.example.yaml"), str(db))
     s = Store(db); a = AuthStore(s)
@@ -52,8 +82,10 @@ async def main():
                                          "display_name":"Copperfield CPA","zones":["floor-3"]})
         check(r.status_code == 201, f"created ({r.status_code})")
         issued = r.json()
-        check("password" in issued and len(issued["password"]) == 16,
-              "a one-time password is returned")
+        # Length asserted against the generator, not a literal, so shortening it
+        # again does not silently fail here.
+        check("password" in issued and len(issued["password"]) == len(generate_password()),
+              f"a one-time password is returned ({len(issued.get('password',''))} chars)")
         check(issued.get("must_change_password") is True, "flagged as must-change")
         pw = issued["password"]
 
@@ -100,7 +132,8 @@ async def main():
         r = await c.put("/users/suite301/password")
         check(r.status_code == 200, f"reset accepted with no body ({r.status_code})")
         reset_pw = r.json().get("password", "")
-        check(len(reset_pw) == 16, "a fresh one-time password is returned")
+        check(len(reset_pw) == len(generate_password()),
+              f"a fresh one-time password is returned ({len(reset_pw)} chars)")
         check(r.json().get("must_change_password") is True, "flagged as must-change")
         # The whole point: the admin cannot pick the value. This resets again, so
         # the password from here on is this one, not the one above.

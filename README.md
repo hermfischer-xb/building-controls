@@ -342,8 +342,11 @@ necessarily sees the first password. There is deliberately **no field to type on
 into**: the server generates it, returns it once, and the account can do nothing
 until its owner replaces it.
 
-1. An admin creates the account. A 16-character one-time password appears once on
-   the Users page, to be handed over however is convenient.
+1. An admin creates the account. A 10-character one-time password appears once on
+   the Users page, to be handed over however is convenient. It is lower case with
+   no `I`, `l`, `1`, `O`, `o` or `0`, because it gets read aloud and typed on a
+   phone — 50 bits, which against a throttle allowing ~2,300 guesses a day is
+   more margin than anything used once needs.
 2. That password signs in and goes straight to *Choose your password*. Every
    other page redirects there, and every API call returns 403 with
    `password_change_required` — a forced change that can be navigated around is

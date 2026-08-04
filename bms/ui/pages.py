@@ -967,7 +967,11 @@ own suite. Managers run the building; admins also manage accounts.</p>
   <div class="sub">One-time password for <strong id="issued-user"></strong> — shown once.
    They must replace it at next sign-in.</div>
   <div class="big" id="issued-pass"
-       style="font-size:1.35rem;letter-spacing:.04em;user-select:all;word-break:break-all"></div>
+       style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+              font-size:1.5rem;letter-spacing:.12em;user-select:all;word-break:break-all"></div>
+  <p class="sub" style="margin:.4rem 0 0">All lower case, so there is no capital
+     I to mistake for l and no capital O to mistake for zero. Those digits are
+     left out too, along with l and o — none of the six appear.</p>
   <button style="margin-top:.6rem" onclick="copyIssued()">Copy</button>
  </div>
 </div>

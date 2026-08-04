@@ -17,23 +17,15 @@ import argparse
 import csv
 import getpass
 import os
-import secrets
-import string
 import sys
 from pathlib import Path
 
-from .auth import AuthStore, ROLES
+from .auth import AuthStore, ROLES, generate_password
 from .store import Store
-
-ALPHABET = string.ascii_letters + string.digits
 
 # Columns accepted by import-csv. Only `username` is required; a missing role
 # means tenant, which is what a bulk file of suites almost always is.
 CSV_COLUMNS = ("username", "display_name", "role", "zones", "password")
-
-
-def generate_password(length: int = 16) -> str:
-    return "".join(secrets.choice(ALPHABET) for _ in range(length))
 
 
 def prompt_password(username: str) -> tuple[str, bool]:

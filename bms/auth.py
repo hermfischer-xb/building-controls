@@ -50,8 +50,22 @@ ROLES = ("admin", "manager", "tenant")
 _RANK = {"tenant": 0, "manager": 1, "admin": 2}
 
 
-def generate_password(length: int = 16) -> str:
-    """A first password nobody had to invent.
+# The pairs that actually caused trouble were capital `I` against lowercase `l`,
+# and capital `O` against zero -- both reported from a real Android screen, where
+# the two glyphs in each pair were indistinguishable.
+#
+# Dropping upper case removes `I` and `O` outright, and takes the "capital B,
+# lowercase b" phone call with it. That leaves the lowercase forms still able to
+# collide with digits -- `l` against `1`, `o` against `0` -- so all four go.
+#
+# `i` stays: it is only ever mistaken for `l` or `1`, and neither survives. That
+# lands the alphabet on exactly 32 characters, so each carries 5 bits and the
+# arithmetic below is checkable in your head.
+UNAMBIGUOUS_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"
+
+
+def generate_password(length: int = 10) -> str:
+    """A first password nobody had to invent, and everyone can read.
 
     Used when one account creates another. The alternative -- an admin typing a
     password and reading it out -- means the admin knows a credential the owner
@@ -59,12 +73,21 @@ def generate_password(length: int = 16) -> str:
     shown once, and `must_change_password` forces the owner to replace it before
     they can do anything.
 
-    Letters and digits only: this gets read aloud, written on a sticky note and
-    typed on a phone keyboard, and punctuation in that path causes more lockouts
-    than the extra entropy is worth. 16 characters of this alphabet is ~95 bits.
+    **Length is set by the threat, and the threat here is small.** This password
+    survives exactly one sign-in: it cannot reach any part of the system except
+    the change-password form, and it stops working the moment its owner replaces
+    it. The only attack is online guessing, and `LoginThrottle` allows 8 attempts
+    per account per address per five minutes -- about 2,300 a day. Ten characters
+    of a 32-character alphabet is 50 bits, or 10^15 guesses; at that rate the sun
+    burns out first. Sixteen characters bought nothing anyone will ever need and
+    cost a manager squinting at an Android keyboard, which is a real cost paid
+    every time an account is created.
+
+    Read aloud, texted, or copied off a screen in a bad font -- so the alphabet
+    matters more than the length. Confusable glyphs are gone entirely rather than
+    merely discouraged.
     """
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+    return "".join(secrets.choice(UNAMBIGUOUS_ALPHABET) for _ in range(length))
 
 
 @dataclass(frozen=True)
