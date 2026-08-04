@@ -356,6 +356,53 @@ transmit power *down* — high power everywhere makes clients cling to a distant
 instead of roaming to the near one, which produces exactly this symptom. The Link
 quality table gives a before/after measurement per suite.
 
+### Immediate software mitigation, while the AP work waits
+
+AP changes are weeks away, so two things were done in software. **Both need edits
+to the mini's `config/devices.yaml`, which is gitignored — new defaults do not
+reach it while the old keys are present.**
+
+```yaml
+bacnet:
+  apdu_timeout_ms: 1500      # add
+  apdu_retries: 3            # add
+request_timeout_seconds: 7   # was 5
+offline_after_failures: 3    # add
+```
+
+**1. BACnet's retries were silently disabled.** Confirmed services retry at the
+application layer — `apduTimeout` 3000 ms, `numberOfApduRetries` 3, so four
+transmissions across twelve seconds. `request_timeout_seconds` is an outer bound
+wrapped around that whole cycle, and at 5 it cut the cycle off during the second
+attempt. Measured against a dark address: 5 s ends at 5.00 s with our own
+`TimeoutError`; 15 s ends at 12.01 s with BACnet's `no-response`. Attempts three
+and four never happened — the ones most likely to get through on a lossy link.
+
+Raising the outer timeout alone would make a dead device block the sequential
+poll loop for twelve seconds. The fix is to shorten each attempt instead: 1500 ms
+is still generous against a ~640 ms fleet norm, and four attempts fit in six
+seconds. Verified end to end — the new settings give up at 6.01 s with
+`no-response`, meaning the full cycle ran. The gateway warns at startup if the
+outer timeout is below the budget.
+
+**2. A single lost datagram was being reported as an outage.** This is the bigger
+one. `DeviceState.online` was `consecutive_failures == 0`, so *one* missed poll
+marked a suite offline, told its tenant it was unreachable, and wrote a "went
+offline" line. Over UDP on Wi-Fi that is a routine event.
+
+**This reframes the overnight counts below.** Those 7, 6, 5, 4, 2, 1 figures are
+mostly single missed reads that recovered 30 seconds later, not outages. The
+floor-2 concentration still stands — it is the same measurement across all units —
+but the absolute numbers overstate how bad it is.
+
+`offline_after_failures: 3` is about 90 seconds at a 30 s interval. Every failure
+is still counted, so the Link quality table keeps its diagnostic value, and a
+device now shows `missed 1` / `missed 2` before going offline — the early warning
+the old behaviour buried.
+
+Expect the log to go much quieter after this. That is the point, and it is not
+evidence the radio problem is fixed.
+
 ### The overnight data says floor 2, not one bad thermostat
 
 Recovered on the mini from `/usr/local/var/log/building-controls.log`, 22:00

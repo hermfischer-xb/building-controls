@@ -35,10 +35,26 @@ class DeviceState:
     avg_poll_ms: float | None = None
     total_failures: int = 0
     total_polls: int = 0
+    # Consecutive failures tolerated before the device is called offline.
+    # Defaulted to 1 so a DeviceState built directly behaves as it always did;
+    # the Cache overrides it from config for every device it registers.
+    offline_after: int = 1
 
     @property
     def online(self) -> bool:
-        return self.consecutive_failures == 0 and self.last_success is not None
+        """Reachable, allowing for the odd lost datagram.
+
+        BACnet/IP is UDP over Wi-Fi here, where losing a packet is routine rather
+        than exceptional. Treating one missed poll as an outage told a tenant
+        their suite was unreachable, and wrote a transition into the log, for
+        something that had already corrected itself by the next cycle.
+        """
+        return self.consecutive_failures < self.offline_after and self.last_success is not None
+
+    @property
+    def unstable(self) -> bool:
+        """Missing polls but not yet offline -- the state worth seeing early."""
+        return 0 < self.consecutive_failures < self.offline_after
 
     @property
     def failure_rate(self) -> float | None:
@@ -57,6 +73,7 @@ class DeviceState:
             "zone": self.zone,
             "address": self.address,
             "online": self.online,
+            "unstable": self.unstable,
             "stale": age is None or age > stale_after,
             "age_seconds": None if age is None else round(age, 1),
             "last_error": self.last_error,
@@ -71,13 +88,15 @@ class DeviceState:
 
 
 class Cache:
-    def __init__(self, stale_after: float) -> None:
+    def __init__(self, stale_after: float, offline_after: int = 1) -> None:
         self._devices: dict[int, DeviceState] = {}
         self._stale_after = stale_after
+        self._offline_after = offline_after
 
     def register(self, device_id: int, name: str, zone: str, address: str) -> None:
         self._devices[device_id] = DeviceState(
-            device_id=device_id, name=name, zone=zone, address=address
+            device_id=device_id, name=name, zone=zone, address=address,
+            offline_after=self._offline_after,
         )
 
     # Weight of each new sample in the smoothed average. 0.2 settles in roughly

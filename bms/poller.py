@@ -134,16 +134,30 @@ class Poller:
                 # a unit on a weak signal is slow while its neighbours are fine,
                 # and this is the only link-quality signal available -- the
                 # thermostats do not expose Wi-Fi RSSI over BACnet.
+                was_missing = (state := self._cache.get(device.device_id)) is not None \
+                    and state.consecutive_failures > 0
                 self._cache.record_success(
                     device.device_id, values, (time.perf_counter() - started) * 1000
                 )
+                if was_missing:
+                    # Recovery is worth a line at info: it distinguishes a unit
+                    # that flickers from one that is genuinely down, which is the
+                    # whole question when chasing a marginal radio link.
+                    log.info("%s answered again after %d missed poll(s)",
+                             device.name, state.consecutive_failures)
             except DeviceUnreachable as err:
-                state = self._cache.get(device.device_id)
-                # Log the transition, not every cycle, or an offline thermostat
-                # produces a log line every 10 seconds forever.
-                if state and state.consecutive_failures == 0:
-                    log.warning("%s went offline: %s", device.name, err)
                 self._cache.record_failure(device.device_id, str(err))
+                state = self._cache.get(device.device_id)
+                # Log the transition into offline, not every cycle, or an offline
+                # thermostat produces a line every interval forever. Recorded
+                # first so the threshold is tested against the new count: firing
+                # on the *first* miss is what filled the log with units that had
+                # simply lost a datagram and were fine on the next pass.
+                if state and state.consecutive_failures == self._cfg.offline_after_failures:
+                    log.warning(
+                        "%s went offline after %d consecutive failures: %s",
+                        device.name, state.consecutive_failures, err,
+                    )
             except Exception:  # noqa: BLE001 - one bad device must not kill the loop
                 log.exception("unexpected error polling %s", device.name)
                 self._cache.record_failure(device.device_id, "internal error")

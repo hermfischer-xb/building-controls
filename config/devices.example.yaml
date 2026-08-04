@@ -35,28 +35,30 @@ bacnet:
 # is flagged after 90 s; commands do not wait for the next cycle, they re-read
 # immediately.
 poll_interval_seconds: 30
-# BACnet/IP is UDP, and confirmed services carry their own retry: the device
-# object's apduTimeout (3000 ms) and numberOfApduRetries (3) mean a request is
-# transmitted up to four times over about twelve seconds before the stack gives
-# up. This setting is an OUTER timeout wrapped around all of that.
+# BACnet/IP is UDP, and confirmed services carry their own retry: each attempt
+# waits `bacnet.apdu_timeout_ms` and there are `bacnet.apdu_retries` more after
+# the first. This is the OUTER bound wrapped around that whole cycle, so it must
+# exceed apdu_timeout_ms * (apdu_retries + 1) or it cuts the retries off and they
+# never happen. The stack defaults -- 3000 ms x 4 attempts = 12 s -- did not fit
+# inside the old 5 s value, which is how retries came to be silently disabled.
 #
-# At 5 it truncates the retry cycle. Measured against a dark address: 5 gives up
-# at 5.00 s with our own TimeoutError, part-way through the second attempt, while
-# 15 lets bacpypes3 run all four and abort at 12.01 s with BACnet's own
-# no-response. So attempts three and four -- the ones most likely to get through
-# on a lossy link -- currently never happen.
+# 1500 ms x 4 = 6 s, so 7 leaves headroom. The gateway warns at startup if this
+# is set below the budget.
+request_timeout_seconds: 7
+
+# How many consecutive failed polls before a device is called offline.
 #
-# Raising this alone is the wrong fix: a genuinely dead device would then block
-# the sequential poll loop for twelve seconds instead of five. If retries matter
-# on your Wi-Fi, shorten each attempt rather than lengthening the wait -- these
-# thermostats answer in ~640 ms, so 3 s per attempt is generous. Four attempts at
-# 1.5 s fits inside a 7 s outer timeout and retransmits sooner, which is what a
-# lossy link actually wants.
+# This was effectively 1, which meant a single lost UDP datagram told a tenant
+# their suite was unreachable and wrote an "went offline" line into the log. On
+# Wi-Fi that is a routine event. Counting the overnight log at this building, most
+# recorded "outages" were exactly this: one missed read, recovered on the next
+# pass 30 seconds later.
 #
-# Note this changes what a "failure" means: today it means one-and-a-bit
-# attempts, afterwards it means four. Do not compare drop-out counts across the
-# change.
-request_timeout_seconds: 5
+# 3 is about 90 seconds at a 30 s interval. Failures are still counted either way,
+# so the Link quality table on the System page keeps its diagnostic value -- a
+# device shows "missed 1" or "missed 2" before it is called offline, which is the
+# early warning the old behaviour buried in noise.
+offline_after_failures: 3
 
 # Loopback only. This host has a public static IP; the web app must never be
 # reachable on it. Remote access goes over Tailscale/WireGuard.

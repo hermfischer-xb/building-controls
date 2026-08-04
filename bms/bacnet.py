@@ -103,7 +103,34 @@ class BacnetClient:
             ttl=self._cfg.foreign_ttl,
         )
         self._app = Application.from_args(args)
-        log.info("BACnet bound to %s as device %d", self._cfg.address, self._cfg.device_id)
+
+        # bacpypes3 reads these off our own device object when it builds each
+        # transaction's state machine, so setting them here governs every request.
+        # The stack ships 3000 ms x 3 retries -- four transmissions across twelve
+        # seconds, which is tuned for slow MS/TP segments. Over Wi-Fi it means a
+        # lost datagram is not retried until long after the outer timeout has
+        # given up, so no retry ever completed and the retry mechanism was
+        # effectively off.
+        device_object = self._app.device_object
+        device_object.apduTimeout = self._cfg.apdu_timeout_ms
+        device_object.numberOfApduRetries = self._cfg.apdu_retries
+
+        budget = self._cfg.retry_budget_seconds
+        if budget > self._timeout:
+            # Worth saying out loud rather than leaving as arithmetic in a config
+            # comment: this is the exact misconfiguration that silently disabled
+            # retries, and it looks like nothing at all from the outside.
+            log.warning(
+                "request_timeout_seconds=%.1f is below the %.1fs retry budget "
+                "(%d ms x %d attempts) -- requests will be cut off part-way through "
+                "the retry cycle, so late attempts never happen",
+                self._timeout, budget, self._cfg.apdu_timeout_ms, self._cfg.apdu_retries + 1,
+            )
+
+        log.info(
+            "BACnet bound to %s as device %d (up to %d attempts over %.1fs per request)",
+            self._cfg.address, self._cfg.device_id, self._cfg.apdu_retries + 1, budget,
+        )
 
     async def stop(self) -> None:
         if self._app:

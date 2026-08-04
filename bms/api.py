@@ -130,7 +130,8 @@ class HolidayRequest(BaseModel):
 
 def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     client = BacnetClient(cfg.bacnet, cfg.request_timeout_seconds)
-    cache = Cache(stale_after=cfg.poll_interval_seconds * 3)
+    cache = Cache(stale_after=cfg.poll_interval_seconds * 3,
+                  offline_after=cfg.offline_after_failures)
     store = Store(db_path)
     # Zones reads the store, so both must exist before anything that resolves one.
     zones = Zones(cfg.devices, store)

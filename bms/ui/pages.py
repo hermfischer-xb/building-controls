@@ -54,6 +54,12 @@ def _occ_chip(value: Any) -> str:
 def _status_chip(device: dict) -> str:
     if not device.get("online"):
         return chip("offline", "bad")
+    if device.get("unstable"):
+        # Missed a poll but not enough to be called offline. Shown rather than
+        # hidden: the tolerance exists so a lost datagram is not an outage, not so
+        # that a degrading radio link goes unnoticed until it fails outright.
+        misses = device.get("consecutive_failures") or 0
+        return chip(f"missed {misses}", "warn")
     if device.get("stale"):
         return chip("stale", "warn")
     return chip("online", "ok")

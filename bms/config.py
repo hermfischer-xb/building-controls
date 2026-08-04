@@ -42,6 +42,19 @@ class DeviceConfig(BaseModel):
 
 
 class BacnetConfig(BaseModel):
+    """Datalink settings, plus the knobs governing BACnet's own retry.
+
+    BACnet/IP is UDP and confirmed services retry at the application layer:
+    each attempt waits `apdu_timeout_ms`, and there are `apdu_retries` of them
+    after the first transmission. The stack defaults are 3000 ms and 3, i.e. four
+    transmissions across twelve seconds -- far longer than any sane poll cycle, so
+    in practice the outer timeout cut them off and no retry ever completed.
+
+    Shortening each attempt is what makes retries usable. These thermostats answer
+    in ~640 ms on this building's Wi-Fi, so 1500 ms is already generous, and four
+    attempts fit inside seven seconds.
+    """
+
     # Always pin the interface. A host with two NICs on the same subnet will
     # otherwise bind ambiguously and Who-Is can leave by the wrong one.
     address: str = Field(description="local interface with prefix, e.g. 192.168.1.10/24")
@@ -51,6 +64,22 @@ class BacnetConfig(BaseModel):
         default=None, description="BBMD address if the gateway is not on the thermostats' subnet"
     )
     foreign_ttl: int = Field(default=30)
+
+    apdu_timeout_ms: int = Field(
+        default=1500, ge=250,
+        description="how long one transmission waits for its acknowledgement. The BACnet "
+        "default is 3000, which is tuned for slow MS/TP segments; on Wi-Fi it mostly "
+        "means a lost datagram is not retried until far too late to help.",
+    )
+    apdu_retries: int = Field(
+        default=3, ge=0,
+        description="retransmissions after the first attempt, so 3 means four tries in all",
+    )
+
+    @property
+    def retry_budget_seconds(self) -> float:
+        """Worst case for one request: every attempt timing out."""
+        return self.apdu_timeout_ms * (self.apdu_retries + 1) / 1000.0
 
 
 class OutdoorWeatherConfig(BaseModel):
@@ -112,7 +141,17 @@ class Config(BaseModel):
     bacnet: BacnetConfig
     devices: list[DeviceConfig]
     poll_interval_seconds: float = Field(default=10.0, ge=1.0)
-    request_timeout_seconds: float = Field(default=5.0)
+    # Outer bound on a single request, wrapped around BACnet's own retry cycle.
+    # Must exceed apdu_timeout_ms * (apdu_retries + 1) or it truncates the retries
+    # and the tuning below does nothing. 1500 ms * 4 = 6 s, so 7 leaves headroom.
+    request_timeout_seconds: float = Field(default=7.0)
+
+    # How many consecutive failed polls before a device is called offline.
+    # 1 -- the original behaviour -- meant a single lost UDP datagram presented as
+    # an outage: the tenant page said the suite was unreachable and the log
+    # recorded a transition. On Wi-Fi that is a routine event, not an outage.
+    # 3 means roughly a minute and a half at a 30 s interval.
+    offline_after_failures: int = Field(default=3, ge=1)
     api_host: str = Field(
         default="127.0.0.1",
         description="bind address. Never 0.0.0.0 on a host with a public interface.",
