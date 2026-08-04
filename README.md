@@ -71,17 +71,25 @@ which is harmless only because writing the same value again is idempotent.
 
 **Then note what `request_timeout_seconds` does to that.** It is an outer timeout
 wrapped around the whole retry cycle, so setting it below the cycle length
-silently discards retries. Measured against an address that never answers:
+silently discards retries — the request is abandoned part-way and the later
+attempts never happen. Measured against an address that never answers:
 
-| `request_timeout_seconds` | gives up after | ends with |
-|---|---|---|
-| 5 (the shipped default) | 5.00 s | our own `TimeoutError`, mid-second-attempt |
-| 15 | 12.01 s | BACnet's `no-response` abort, all four attempts spent |
+| `apdu_timeout_ms` × attempts | `request_timeout_seconds` | gives up after | ends with |
+|---|---|---|---|
+| 3000 × 4 = 12 s | 5 (was the default) | 5.00 s | our own `TimeoutError`, mid-second-attempt |
+| 3000 × 4 = 12 s | 15 | 12.01 s | BACnet's `no-response`, all four spent |
+| 1500 × 4 = 6 s | 7 (**current default**) | 6.01 s | BACnet's `no-response`, all four spent |
 
-So the default gets one attempt and part of a second. On a clean wired segment
-that is fine and fails fast. On lossy Wi-Fi it throws away the retries that would
-have recovered the read — see `config/devices.example.yaml` for why the fix is to
-shorten each attempt rather than lengthen the wait.
+The original pairing got one attempt and part of a second, on every request, with
+no symptom other than reads failing that would have succeeded. Raising the outer
+timeout alone is the wrong correction — a dead device would then hold the
+sequential poll loop for twelve seconds — so each *attempt* was shortened
+instead. These thermostats answer in ~640 ms, so 1500 ms is still generous, and
+four attempts fit inside seven seconds.
+
+The gateway logs a warning at startup if `request_timeout_seconds` is below
+`apdu_timeout_ms × (apdu_retries + 1)`, because nothing else about that mistake
+is visible from the outside.
 
 So the database holds what the building *should* do, the thermostats hold what
 they *are* doing, and a reconciler closes the gap on a loop.
@@ -543,6 +551,7 @@ tools/
   test_proxy.py   login throttle keys on the real client, not the proxy
   test_passkeys.py  passkey security properties, against a software authenticator
   test_passwords.py one-time passwords: generated, forced change, single use
+  test_pages.py     renders every page and parses its JavaScript with node
   devices_from_csv.py  a spreadsheet of thermostats -> the devices: block
   truportal_soap.py    raw SOAP calls, for exploring the panel
 deploy/
