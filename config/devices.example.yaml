@@ -19,7 +19,22 @@ bacnet:
   name: bms-gateway
   # foreign_bbmd: 192.168.0.1:47808   # only if the gateway is off the thermostats' subnet
 
-poll_interval_seconds: 10
+# Budget this from measured round-trips, not from the RPM read time. Measured
+# against 16 real thermostats on building Wi-Fi: ~640 ms per device, so a cycle
+# is ~10 s for 16 and ~16 s for 25. The 19 ms figure this project once quoted was
+# a wired bench measurement of the read alone and is 33x optimistic; it is what
+# made a 10-second interval look safe when it was not.
+#
+# Too low does not crash anything -- the loop sleeps for whatever is left of the
+# interval, never less than zero -- but it saturates: the cycle ends and the next
+# begins immediately, logging "poll cycle took Ns, longer than the Ns interval"
+# every time, with no headroom for the ~5 s a non-answering device costs. That
+# warning is the signal to raise this number.
+#
+# 30 suits ~16-25 devices over Wi-Fi. Note staleness is 3x this, so a dead device
+# is flagged after 90 s; commands do not wait for the next cycle, they re-read
+# immediately.
+poll_interval_seconds: 30
 request_timeout_seconds: 5
 
 # Loopback only. This host has a public static IP; the web app must never be

@@ -1,7 +1,8 @@
 # Handoff: laptop session → mini, 2026-08-03
 
-Eight commits pushed from the laptop since `6a5cdde` (the last thing the mini
-pushed).
+Both machines now push here. `git log --oneline 6a5cdde..` is the authoritative
+list — a count written into this sentence went stale twice, so it is no longer
+written down.
 
 **State of the mini as of the last exchange:**
 
@@ -61,6 +62,47 @@ also a collision waiting to happen: one unit on the default is a mismatch, a
 second is genuinely ambiguous. Check this before commissioning any further
 thermostat. Full reasoning sits in a comment beside the 207 entry in the mini's
 `config/devices.yaml`, which git will never show you.
+
+---
+
+## Answered from the laptop, 2026-08-03 night
+
+**Both requested changes are done.**
+
+1. `bms/poller.py`'s docstring no longer claims 19 ms. It now carries your
+   measured ~640 ms per device, says a 25-device fleet is therefore ~16 s not
+   half a second, and explains *why* the bench number was 33x optimistic — it
+   timed the read alone, on wire, against one unit.
+2. `config/devices.example.yaml` ships `poll_interval_seconds: 30` with the same
+   reasoning, so the next building starts from a real figure.
+
+**One thing not asked for, because your report implied it.** You noted the
+overrun warning fired every cycle. It had no guard, unlike the offline-device
+path four lines below it, which already logs the transition rather than the
+state — at a 10 s interval that was six identical lines a minute, indefinitely,
+burying everything else. It now logs the first overrun and every 20th, reports
+devices and per-device milliseconds, recommends a concrete interval, and logs
+recovery when the loop comes back inside its budget.
+
+Checked against your numbers rather than invented: 16 devices x 640 ms
+recommends exactly `30`, the value you independently chose. 25 x 640 ms also
+gives 30.
+
+**Correction on Suite 207 — the clock failure is *not* silent.** `read_device_time`
+returning `None` is swallowed, as you said, but `_reconcile_clock` turns that into
+`result.errors.append("could not read device clock")`, and `pages.py:729` renders
+any device with errors as a red `errors` chip on the System page with the message
+beside it. So 207 should be sitting there visibly failing after every reconcile,
+and `_verify_inventory` logs an id-mismatch warning for it at every startup.
+
+That matters for how it gets triaged: it is a standing visible fault, not a hidden
+one, so it does not need instrumenting — it needs the unit fixed or swapped.
+Worth watching for the reason you gave: these thermostats evaluate schedules
+**on-device**, so a clock nobody can set eventually means occupancy starting at
+the wrong hour, in a suite, with no other symptom.
+
+Everything else in your note I have left exactly as you set it, including 207
+staying `207` in the config.
 
 ---
 
