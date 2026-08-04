@@ -177,8 +177,12 @@ class LoginThrottle:
     def record_failure(self, username: str, client: str) -> None:
         key = f"{username.lower()}|{client}"
         now = time.time()
+        # One append, not two. `_prune` stores the list it returns, so appending
+        # to its return value and to `self._attempts[key]` are the same list --
+        # writing both recorded every failure twice and halved the real budget to
+        # four attempts. It failed closed rather than open, which is why it went
+        # unnoticed: the throttle simply bit sooner than configured.
         self._prune(key, now).append(now)
-        self._attempts[key].append(now)
 
     def clear(self, username: str, client: str) -> None:
         self._attempts.pop(f"{username.lower()}|{client}", None)

@@ -571,6 +571,12 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             "offline_after_failures": cfg.offline_after_failures,
             "request_timeout_seconds": cfg.request_timeout_seconds,
             "retry_budget_seconds": cfg.bacnet.retry_budget_seconds,
+            # Whether the client-IP header is believed. Reported because the
+            # login throttle keys on whatever client_ip() returns, so this single
+            # flag decides whether every request behind a tunnel shares one
+            # bucket or gets its own -- and a test cannot tell a safe default
+            # from a broken throttle without knowing it.
+            "behind_proxy": cfg.behind_proxy,
         }
 
     @app.get("/points")
