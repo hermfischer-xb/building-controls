@@ -35,6 +35,27 @@ bacnet:
 # is flagged after 90 s; commands do not wait for the next cycle, they re-read
 # immediately.
 poll_interval_seconds: 30
+# BACnet/IP is UDP, and confirmed services carry their own retry: the device
+# object's apduTimeout (3000 ms) and numberOfApduRetries (3) mean a request is
+# transmitted up to four times over about twelve seconds before the stack gives
+# up. This setting is an OUTER timeout wrapped around all of that.
+#
+# At 5 it truncates the retry cycle. Measured against a dark address: 5 gives up
+# at 5.00 s with our own TimeoutError, part-way through the second attempt, while
+# 15 lets bacpypes3 run all four and abort at 12.01 s with BACnet's own
+# no-response. So attempts three and four -- the ones most likely to get through
+# on a lossy link -- currently never happen.
+#
+# Raising this alone is the wrong fix: a genuinely dead device would then block
+# the sequential poll loop for twelve seconds instead of five. If retries matter
+# on your Wi-Fi, shorten each attempt rather than lengthening the wait -- these
+# thermostats answer in ~640 ms, so 3 s per attempt is generous. Four attempts at
+# 1.5 s fits inside a 7 s outer timeout and retransmits sooner, which is what a
+# lossy link actually wants.
+#
+# Note this changes what a "failure" means: today it means one-and-a-bit
+# attempts, afterwards it means four. Do not compare drop-out counts across the
+# change.
 request_timeout_seconds: 5
 
 # Loopback only. This host has a public static IP; the web app must never be

@@ -49,7 +49,39 @@ from the manual:
   result of the last poll. `read-property-multiple` is supported, which is what
   makes polling cheap (~19 ms for 16 points, versus ~197 ms read individually).
 - **A write can be applied without being acknowledged.** A failed write response
-  does *not* mean the write failed. The only way to know is to read back.
+  does *not* mean the write failed. The only way to know is to read back. This is
+  a direct consequence of the transport: BACnet/IP is **UDP**, so a write can
+  arrive and be executed while its acknowledgement is lost on the way back.
+
+### BACnet does retry — but not the way TCP does
+
+Worth being precise about, because "UDP" is often read as "fire and forget".
+Confirmed services (`ReadProperty`, `ReadPropertyMultiple`, `WriteProperty`) are
+acknowledged, and the device object carries `apduTimeout` (3000 ms) and
+`numberOfApduRetries` (3), so a request is transmitted up to **four times over
+about twelve seconds** before the stack gives up. Unconfirmed services (`Who-Is`,
+`I-Am`, `TimeSynchronization`) have no acknowledgement and no retry at all.
+
+But it is per-transaction retry, not a connection. There is no sequencing, no
+congestion control, no adaptive backoff, and nothing that survives once the
+retries are spent — where TCP will keep a session alive across minutes of near
+total loss, BACnet gives up after four tries and the transaction fails. There is
+also no exactly-once guarantee: a retransmitted write may be executed twice,
+which is harmless only because writing the same value again is idempotent.
+
+**Then note what `request_timeout_seconds` does to that.** It is an outer timeout
+wrapped around the whole retry cycle, so setting it below the cycle length
+silently discards retries. Measured against an address that never answers:
+
+| `request_timeout_seconds` | gives up after | ends with |
+|---|---|---|
+| 5 (the shipped default) | 5.00 s | our own `TimeoutError`, mid-second-attempt |
+| 15 | 12.01 s | BACnet's `no-response` abort, all four attempts spent |
+
+So the default gets one attempt and part of a second. On a clean wired segment
+that is fine and fails fast. On lossy Wi-Fi it throws away the retries that would
+have recovered the read — see `config/devices.example.yaml` for why the fix is to
+shorten each attempt rather than lengthen the wait.
 
 So the database holds what the building *should* do, the thermostats hold what
 they *are* doing, and a reconciler closes the gap on a loop.
