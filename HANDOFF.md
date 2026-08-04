@@ -8,17 +8,59 @@ pushed).
 - Repo pulled — it is at `fbb1927` or later.
 - Backup job installed, bootstrapped and verified: `last exit code = 0`, log
   written, first snapshot in `/usr/local/var/backups/building-controls`.
-- **The gateway has NOT been restarted.** It is still running a process that
-  predates `6a5cdde`, so none of the code below is live yet. Until this runs, the
-  dashboard has no door buttons and the verification window is still 120s:
-
-```bash
-sudo launchctl kickstart -k system/com.building-controls.gateway
-curl -sS localhost:8237/health
-```
+- **The gateway HAS now been restarted** (2026-08-03 18:14, superseding the
+  warning that used to sit here). Everything under *What changed* is live.
 
 The `code version` line in a backup log is the *repo's* SHA, not the running
 process's — do not read it as proof the gateway restarted.
+
+---
+
+## Added from the mini, 2026-08-03 evening
+
+**The fleet went from 1 thermostat to 16.** Fifteen were added to
+`config/devices.yaml` — gitignored, so this is the only place that side of the
+work is visible. All follow the −100 convention (room 326 → `192.168.144.226`);
+zones split 11 × floor-3, 5 × floor-2. `devices_from_csv.py` earned its keep: it
+caught a duplicate address where 303 had been transcribed as `.205`, a copy of
+the row above it, and a duplicate MAC between 305 and 307.
+
+**`poll_interval_seconds` raised 10 → 30, and `bms/poller.py`'s docstring is
+wrong.** It claims "a measured 19ms per device leaves a 25-device cycle around
+half a second". Measured here with 16 real thermostats over Wi-Fi: **~640 ms per
+device**, so a cycle is ~10.2 s. At the old interval the loop never slept — it
+finished a cycle and immediately began the next, logging a warning every time,
+with zero headroom for the 5 s a non-answering device costs. 19 ms was a wired
+bench figure and is 33× off for this building.
+
+`stale_after` is 3 × the interval, so a dead device is now flagged after 90 s
+instead of 30 s. Acceptable: a suite's temperature does not move meaningfully in
+that time, and `settle_and_refresh` re-reads immediately after any command.
+
+**Two changes this implies, deliberately NOT made on the mini** so they would
+not ride along with a production restart — please do them on the laptop:
+
+1. Correct that docstring in `bms/poller.py`. The 19 ms claim is the assumption
+   that made a 10 s interval look safe.
+2. Carry the same note into `config/devices.example.yaml`, so the next building
+   does not start from a bench number.
+
+**Suite 207 will not keep a BACnet Device ID — swap deferred.** It reports the
+factory default `4194302` and reverts on exit, with the installer passcode
+entered, both for `207` and for an unrelated in-range value (`111307`) — so it
+is the unit's storage, not a validation rule. Its twin Suite 314 shares the OUI
+`04:7b:cb` and accepted its id correctly, so this is not a model-wide fault.
+
+Left as `207` in the config deliberately. Polling is unaffected: reads address
+the point objects by IP and never name the device object, which is why it shows
+online. What silently does not work is `read_device_time` (`bacnet.py:185`),
+which addresses `device,207`; the failure is swallowed as "clock is optional".
+**Do not "fix" this by putting `4194302` in the config** — it would silence the
+startup warning, make `/t/4194302` the tenant URL, and hide a real fault. It is
+also a collision waiting to happen: one unit on the default is a mismatch, a
+second is genuinely ambiguous. Check this before commissioning any further
+thermostat. Full reasoning sits in a comment beside the 207 entry in the mini's
+`config/devices.yaml`, which git will never show you.
 
 ---
 
@@ -246,10 +288,19 @@ The mini's repo is at `/Users/Shared/building-controls` — outside TCC, per the
 
 ## Still open, in priority order
 
-0. **Restart the gateway** (top of this document). Everything under *What
-   changed* is inert until then, including the reported missing door buttons.
-   Then confirm on a phone that `/` shows them for both accounts — that fix has
-   only ever been tested against a stubbed panel, never real hardware.
+0. ~~Restart the gateway~~ — **done 2026-08-03 18:14.** The second half is not:
+   **confirm on a phone that `/` shows the door and light buttons for both
+   accounts.** That fix has only ever been tested against a stubbed panel, never
+   real hardware. The access log cannot settle it — `/` returns 200 on every
+   15-second auto-reload whether or not `access_buttons()` produced anything,
+   and no `POST /doors` or `POST /lighting` has come from `/` since the restart.
+   Someone has to look at the screen.
+
+   For contrast, what *has* been confirmed on real hardware, from `/t/326`: door
+   unlock end to end (passkey registration, Face ID, panel relock), the explicit
+   10-minute lighting button, and the lights an unlock turns on as a side effect
+   — each verified physically at the building and against the audit table, not
+   inferred from a 200.
 
 1. **Cloudflare dashboard.** Access on `/ui/*`, a rate-limit rule on `/login`,
    SSL Full (strict). Certificate Transparency publishes every hostname that gets
