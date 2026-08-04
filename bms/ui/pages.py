@@ -999,7 +999,12 @@ function addUser(){{
   }}).catch(err => toast(err.message, false));
 }}
 function resetPassword(username){{
-  if (!confirm('Reset the password for ' + username + '?\n\n'
+  // The line break below is escaped twice on purpose. This is a non-raw Python
+  // f-string, so a single backslash-n is consumed by Python and arrives here as
+  // a real newline -- and JavaScript cannot have one inside a single-quoted
+  // string. That is a parse error, and it takes the whole script block
+  // (saveZones, addUser, copyIssued) down with it, not just this function.
+  if (!confirm('Reset the password for ' + username + '?\\n\\n'
              + 'Their current password stops working immediately and every session '
              + 'on the account is signed out. You will get a one-time password to '
              + 'hand over.')) return;
