@@ -485,13 +485,58 @@ Distinct clients must get distinct throttle budgets.
 - **SSL/TLS**: Full (strict); Always Use HTTPS; minimum TLS 1.2; HSTS **after**
   confirming HTTPS works end to end
 - **Bots**: block AI scrapers and crawlers; Bot Fight Mode on
-- **Rate limiting**: the free rule is best spent on `/login`
+- **Rate limiting**: spend the one free rule on `POST /login` — see below
 - **Access** (free to 50 users): protect `/ui/*` only. Two or three seats for you
   and the building manager adds a second factor on the surfaces that can create
   admin accounts, while tenants hitting `/t/…` and `/login` are untouched and
   consume no seats.
 - Do **not** geo-block. Tempting for a building in Encino, but it locks you out
   from a hotel abroad, which is exactly when you need it.
+
+### The one free rate-limiting rule
+
+Put it on the login form submission, counting by IP:
+
+```
+Expression:  (http.request.uri.path eq "/login" and http.request.method eq "POST")
+Counting:    by IP address (the free plan's only characteristic)
+Threshold:   5 requests
+Period:      the shortest offered (free plans typically expose only 10 seconds)
+Action:      Block, for the longest mitigation timeout offered
+```
+
+**Why this endpoint and not the doors.** `POST /doors/{id}/unlock` looks like the
+thing worth protecting, but it already requires a session cookie *and* a passkey
+assertion inside 90 seconds; an anonymous attacker gets a 401 and never reaches
+the panel. Rate limiting it would mostly risk blocking someone standing at a door
+in the rain. `/login` is the only endpoint where an unauthenticated stranger can
+do unlimited useful work.
+
+**Why it is not redundant with `LoginThrottle`.** The in-process throttle keys on
+`username|client` ([bms/auth.py](../bms/auth.py)), which means it catches someone
+hammering *one* account — and never fires for someone spraying one password
+across many usernames from a single address, because no individual key reaches 8.
+Cloudflare counting by IP alone closes precisely that gap. The two are
+complementary, and neither substitutes for the other: the app's throttle survives
+attacks that never reach Cloudflare, and Cloudflare's survives a gateway restart,
+which resets the in-process one to zero.
+
+**Why `POST` and not the path alone.** `GET /login` is the page itself. Including
+it would count a tenant simply opening the form, and on a 5-request threshold a
+few people arriving at once could lock the building out of its own login page.
+
+**Threshold sanity.** A person signing in makes exactly one POST; fumbling a
+password twice makes three. Everyone on the building's Wi-Fi shares one public
+address, so the rule sees them as a single client — 5 in 10 seconds still leaves
+room for a busy Monday morning, and anyone already signed in is unaffected
+because sessions last 30 days. Tenants on cellular have their own addresses.
+
+**Verify it, in a browser you can afford to lock out for a minute**: submit a
+wrong password six times quickly. The sixth should return Cloudflare's block page
+rather than the app's "Incorrect username or password." If you see the app's
+message every time, the rule is not matching — check it is scoped to the
+hostname, and that `/login` is the path Cloudflare sees rather than something
+rewritten by the tunnel.
 
 ---
 
