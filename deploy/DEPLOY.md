@@ -231,6 +231,13 @@ sudo launchctl print system/com.building-controls.gateway | head -20
 until curl -fsS localhost:8237/health; do sleep 2; done
 ```
 
+`/health` reports the settings the process is actually running --
+`poll_concurrency`, `offline_after_failures`, `request_timeout_seconds` and the
+retry budget -- read from the live client rather than from the config file. Check
+them after any tuning change. A value that failed to reach the daemon looks
+exactly like a value that had no effect, which is how `request_timeout_seconds: 5`
+kept BACnet's retries switched off without a symptom.
+
 Use `bootstrap`, not `load -w`. `load` is deprecated on macOS 15 and reports
 failure as `Load failed: 5: Input/output error`, which says nothing about the
 cause. To stop or replace it: `sudo launchctl bootout

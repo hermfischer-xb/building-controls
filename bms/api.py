@@ -541,7 +541,18 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             "status": "ok" if online == len(devices) else "degraded",
             "devices_total": len(devices),
             "devices_online": online,
+            "unstable": sum(1 for d in devices if d.unstable),
             "poll_interval_seconds": cfg.poll_interval_seconds,
+            # Reported from the live client, not from cfg: the point is to show
+            # what the process is doing, so a setting that failed to reach the
+            # client cannot be mistaken for one that took effect. A tuned value
+            # silently overridden is otherwise indistinguishable from a tuning
+            # that did nothing -- which is how `request_timeout_seconds: 5`
+            # quietly kept BACnet's retries switched off.
+            "poll_concurrency": client.concurrency,
+            "offline_after_failures": cfg.offline_after_failures,
+            "request_timeout_seconds": cfg.request_timeout_seconds,
+            "retry_budget_seconds": cfg.bacnet.retry_budget_seconds,
         }
 
     @app.get("/points")

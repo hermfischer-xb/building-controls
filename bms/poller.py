@@ -72,6 +72,21 @@ class Poller:
     async def start(self) -> None:
         for d in self._cfg.devices:
             self._cache.register(d.device_id, d.name, self._zones.of(d), d.address)
+
+        # Stated plainly because a tuning that silently did not apply looks
+        # exactly like a tuning that had no effect: set poll_concurrency to 3,
+        # have the daemon read 1, and a quiet run reads as "no contention" from
+        # something that never changed. Also on /health, for checking without
+        # trawling the log.
+        concurrency = self._client.concurrency
+        log.info(
+            "polling %d device(s) every %.0fs, %s, offline after %d consecutive failure(s)",
+            len(self._cfg.devices),
+            self._cfg.poll_interval_seconds,
+            "one at a time" if concurrency == 1 else f"up to {concurrency} at a time",
+            self._cfg.offline_after_failures,
+        )
+
         await self._verify_inventory()
         self._task = asyncio.create_task(self._run(), name="poller")
 
@@ -121,16 +136,23 @@ class Poller:
                 # which buries everything else in the log.
                 if self._overruns == 1 or self._overruns % 20 == 0:
                     count = len(self._cfg.devices) or 1
+                    # Suggest concurrency before a longer interval when still
+                    # serial: a cycle usually overruns because one slow device
+                    # delayed everything behind it, and polling less often makes
+                    # the data staler without addressing that.
+                    if self._client.concurrency == 1:
+                        remedy = "set poll_concurrency to 3, or raise poll_interval_seconds"
+                    else:
+                        remedy = ("raise poll_interval_seconds to at least "
+                                  f"{int((elapsed + 2 * self._cfg.request_timeout_seconds) / 10 + 1) * 10}")
                     log.warning(
                         "poll cycle took %.1fs, longer than the %.1fs interval "
-                        "(%d devices, %.0f ms each) -- raise poll_interval_seconds "
-                        "to at least %d [%d consecutive]",
+                        "(%d devices, %.0f ms each) -- %s [%d consecutive]",
                         elapsed,
                         self._cfg.poll_interval_seconds,
                         count,
                         elapsed / count * 1000,
-                        # Round up to the next 10s with room for a timeout or two.
-                        int((elapsed + 2 * self._cfg.request_timeout_seconds) / 10 + 1) * 10,
+                        remedy,
                         self._overruns,
                     )
             elif self._overruns:
