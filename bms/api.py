@@ -27,7 +27,7 @@ from .auth import (
     COOKIE_NAME, SESSION_TTL_SECONDS, AuthStore, LoginThrottle, User,
     generate_password,
 )
-from .bacnet import BacnetClient, DeviceUnreachable
+from .bacnet import BACNET_FAULTS, BacnetClient, DeviceUnreachable
 from .cache import Cache
 from .config import Config
 from .holidays import US_FEDERAL_DEFAULTS, describe, occurrences
@@ -149,12 +149,30 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         try:
             yield
         finally:
-            if truportal is not None:
-                await truportal.stop()
-            await reconciler.stop()
-            await poller.stop()
-            await client.stop()
-            store.close()
+            # Each step guarded separately. These ran as a bare sequence, so the
+            # first failure skipped everything after it -- on 2026-08-04 a dark
+            # thermostat aborted `reconciler.stop()` and the BACnet socket and
+            # the SQLite connection were both left unclosed, with one line of
+            # log to say so. Shutdown must not be all-or-nothing: a step that
+            # cannot finish is worth a traceback, not the loss of the steps
+            # behind it. Ordered so the network stops before the database it
+            # writes into.
+            for name, close in (
+                ("truportal", truportal.stop if truportal is not None else None),
+                ("reconciler", reconciler.stop),
+                ("poller", poller.stop),
+                ("bacnet client", client.stop),
+            ):
+                if close is None:
+                    continue
+                try:
+                    await close()
+                except (*BACNET_FAULTS, Exception):  # noqa: BLE001
+                    log.exception("error stopping %s", name)
+            try:
+                store.close()
+            except Exception:  # noqa: BLE001
+                log.exception("error closing the database")
 
     app = FastAPI(title="BMS Gateway", version="0.1.0", lifespan=lifespan)
     auth = AuthStore(store)

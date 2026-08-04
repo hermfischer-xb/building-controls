@@ -50,7 +50,7 @@ import asyncio
 import logging
 import time
 
-from .bacnet import BacnetClient, DeviceUnreachable
+from .bacnet import BACNET_FAULTS, BacnetClient, DeviceUnreachable
 from .cache import Cache
 from .config import Config
 from .zones import Zones
@@ -97,6 +97,10 @@ class Poller:
                 await self._task
             except asyncio.CancelledError:
                 pass
+            # See Reconciler.stop: awaiting a task re-raises what killed it, and
+            # a shutdown that aborts here skips every cleanup step after it.
+            except (*BACNET_FAULTS, Exception):  # noqa: BLE001
+                log.exception("poll task had already failed")
             self._task = None
 
     async def _verify_inventory(self) -> None:
@@ -214,6 +218,9 @@ class Poller:
                     "%s went offline after %d consecutive failures: %s",
                     device.name, state.consecutive_failures, err,
                 )
-        except Exception:  # noqa: BLE001 - one bad device must not kill the loop
+        # BACNET_FAULTS as well as Exception: bacpypes3's errors derive from
+        # BaseException, so `except Exception` alone does not stop one bad device
+        # killing the loop, which is the entire job of this handler.
+        except (*BACNET_FAULTS, Exception):  # noqa: BLE001
             log.exception("unexpected error polling %s", device.name)
             self._cache.record_failure(device.device_id, "internal error")

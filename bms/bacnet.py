@@ -284,8 +284,15 @@ class BacnetClient:
         """Push local wall-clock time.
 
         TimeSynchronization is an unconfirmed service, so there is no
-        acknowledgement to wait on and no error to catch -- the only way to know
-        it worked is to read the clock back afterwards, which the reconciler does.
+        acknowledgement to wait on and no *protocol* error to catch -- the only
+        way to know it worked is to read the clock back afterwards, which the
+        reconciler does.
+
+        Sending can still fail, though, and that is a different thing: a UDP
+        send to a host the stack has no route to raises OSError, which is very
+        much a live possibility on this network. Converted like every other
+        method here, because the caller runs inside the reconcile loop and a
+        raw fault there is what killed it on 2026-08-04.
         """
         now = now or dt.datetime.now()
         request = TimeSynchronizationRequest(
@@ -296,7 +303,12 @@ class BacnetClient:
         )
         request.pduDestination = Address(device.address)
         async with self._request(device.address):
-            self.app.request(request)
+            try:
+                self.app.request(request)
+            except BACNET_FAULTS as err:
+                raise DeviceUnreachable(
+                    f"{device.name} ({device.address}): {_describe(err)}"
+                ) from err
 
     async def read_device_id(self, device: DeviceConfig) -> int | None:
         """Read the device's own object identifier, to catch inventory mistakes.
@@ -327,11 +339,24 @@ class BacnetClient:
     # rules, and the device honours a referenced calendar within ~3 seconds.
 
     async def read_calendar(self, device: DeviceConfig, objid: str) -> list[dict]:
+        # Converted here like every sibling. This one call was left unwrapped and
+        # it cost the reconciler four hours of downtime on 2026-08-04: a dark
+        # thermostat raised AbortPDU, which derives from BaseException per the
+        # note at the top of this module, so it went straight through
+        # `_reconcile_holidays`'s handler *and* the reconcile loop's own
+        # `except Exception`, killing the task. Nothing logged it, because the
+        # handler meant to log it could not catch it either. The only visible
+        # symptom was a failed shutdown at the next restart.
         async with self._request(device.address):
-            entries = await asyncio.wait_for(
-                self.app.read_property(Address(device.address), objid, "dateList"),
-                timeout=self._timeout,
-            )
+            try:
+                entries = await asyncio.wait_for(
+                    self.app.read_property(Address(device.address), objid, "dateList"),
+                    timeout=self._timeout,
+                )
+            except BACNET_FAULTS as err:
+                raise DeviceUnreachable(
+                    f"{device.name} ({device.address}): {_describe(err)}"
+                ) from err
         return [e.dict_contents() for e in entries]
 
     async def write_calendar(

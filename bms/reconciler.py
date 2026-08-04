@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from .bacnet import BacnetClient, DeviceUnreachable, holiday_event
+from .bacnet import BACNET_FAULTS, BacnetClient, DeviceUnreachable, holiday_event
 from .config import Config, DeviceConfig
 from .holidays import to_calendar_entries
 from .points import BY_KEY, SETPOINT_LIMITS, ScheduleState, is_valid
@@ -99,13 +99,26 @@ class Reconciler:
                 await self._task
             except asyncio.CancelledError:
                 pass
+            # Awaiting a task re-raises whatever killed it, so a cycle that died
+            # earlier surfaces here -- during shutdown, hours later, out of any
+            # context that explains it. That aborted the rest of the cleanup and
+            # printed only "Application shutdown failed".
+            except (*BACNET_FAULTS, Exception):  # noqa: BLE001
+                log.exception("reconcile task had already failed")
             self._task = None
 
     async def _run(self, interval: float) -> None:
         while True:
             try:
                 await self.reconcile_all(actor="reconciler")
-            except Exception:  # noqa: BLE001 - the loop must outlive any single failure
+            # BACNET_FAULTS as well as Exception, because bacpypes3's errors
+            # derive from BaseException and a bare `except Exception` does not
+            # catch them. This guard existed and still let the task die: on
+            # 2026-08-04 the reconciler stopped for four hours and
+            # "reconcile cycle failed" had never once appeared in the log. A
+            # loop guard that cannot catch the thing most likely to escape is
+            # worse than none, because it reads as protection.
+            except (*BACNET_FAULTS, Exception):  # noqa: BLE001
                 log.exception("reconcile cycle failed")
             await asyncio.sleep(interval)
 
@@ -265,7 +278,13 @@ class Reconciler:
             result.already_correct.append(f"clock (drift {drift:+.0f}s)")
             return
 
-        await self._client.sync_time(device, now)
+        try:
+            await self._client.sync_time(device, now)
+        except DeviceUnreachable as err:
+            # Reported per device rather than raised: this ran unguarded, so a
+            # failed send propagated all the way out of the reconcile loop.
+            result.errors.append(f"clock sync: {err}")
+            return
         # TimeSynchronization is unconfirmed, so the only proof is a re-read.
         await asyncio.sleep(2)
         after = await self._client.read_device_time(device)
@@ -344,7 +363,11 @@ class Reconciler:
 
         try:
             current = await self._client.read_calendar(device, HOLIDAY_CALENDAR)
-        except (DeviceUnreachable, Exception) as err:  # noqa: BLE001
+        # `(DeviceUnreachable, Exception)` was redundant -- DeviceUnreachable is
+        # an Exception -- and looked like it covered everything while catching
+        # nothing bacpypes3 actually raises. This is the call that killed the
+        # reconciler.
+        except (*BACNET_FAULTS, Exception) as err:  # noqa: BLE001
             result.errors.append(f"read calendar: {err}")
             return
 
