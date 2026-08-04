@@ -495,15 +495,33 @@ Distinct clients must get distinct throttle budgets.
 
 ### The one free rate-limiting rule
 
-Put it on the login form submission, counting by IP:
+Put it on the login endpoint, counting by IP:
 
 ```
-Expression:  (http.request.uri.path eq "/login" and http.request.method eq "POST")
+Expression:  http.request.uri.path eq "/login"
 Counting:    by IP address (the free plan's only characteristic)
-Threshold:   5 requests
+Threshold:   10 requests
 Period:      the shortest offered (free plans typically expose only 10 seconds)
 Action:      Block, for the longest mitigation timeout offered
 ```
+
+**The free plan does not offer `http.request.method`** in a rate-limiting
+expression — the builder shows only URI path, Operation ID and bot fields, and
+method is Pro and above. So the rule cannot be scoped to the form *submission*
+and will also count the page load. Two consequences:
+
+- The threshold has to absorb it. One sign-in is two requests to this path (`GET`
+  the form, `POST` it); a fumbled password adds one each. **10 per 10 seconds**
+  leaves room for several people arriving together on the building Wi-Fi, who all
+  share one public address and are counted as one client.
+- Scanners doing `GET /login` now consume the budget too, which is mostly fine —
+  they are the traffic this exists for — but it is why the threshold cannot be 5.
+
+If you ever want a tighter rule, the fix is on this side rather than
+Cloudflare's: give the form submission its own path, so path-only matching
+becomes exact and the threshold can drop to 5. Not done, because it splits the
+authentication route to work around a plan limitation, and 10 already changes a
+sprayer's economics.
 
 **Why this endpoint and not the doors.** `POST /doors/{id}/unlock` looks like the
 thing worth protecting, but it already requires a session cookie *and* a passkey
@@ -521,22 +539,19 @@ complementary, and neither substitutes for the other: the app's throttle survive
 attacks that never reach Cloudflare, and Cloudflare's survives a gateway restart,
 which resets the in-process one to zero.
 
-**Why `POST` and not the path alone.** `GET /login` is the page itself. Including
-it would count a tenant simply opening the form, and on a 5-request threshold a
-few people arriving at once could lock the building out of its own login page.
+**What 10 per 10 seconds is actually worth.** It does not stop a patient attacker
+— nothing on one free rule does. It caps a sprayer at ~60 requests a minute
+instead of thousands, and that is the difference between working through the
+building's ~20 usernames a few passwords a minute and doing it at machine speed.
+Anyone already signed in is unaffected either way, because sessions last 30 days
+and never touch this path. Tenants on cellular have their own addresses.
 
-**Threshold sanity.** A person signing in makes exactly one POST; fumbling a
-password twice makes three. Everyone on the building's Wi-Fi shares one public
-address, so the rule sees them as a single client — 5 in 10 seconds still leaves
-room for a busy Monday morning, and anyone already signed in is unaffected
-because sessions last 30 days. Tenants on cellular have their own addresses.
-
-**Verify it, in a browser you can afford to lock out for a minute**: submit a
-wrong password six times quickly. The sixth should return Cloudflare's block page
-rather than the app's "Incorrect username or password." If you see the app's
-message every time, the rule is not matching — check it is scoped to the
-hostname, and that `/login` is the path Cloudflare sees rather than something
-rewritten by the tunnel.
+**Verify it, in a browser you can afford to lock out for a minute**: reload the
+login page and submit a wrong password until you have made a dozen requests
+inside ten seconds. You should get Cloudflare's block page rather than the app's
+"Incorrect username or password." If you only ever see the app's message, the
+rule is not matching — check it is scoped to the hostname, and that `/login` is
+the path Cloudflare sees rather than something rewritten by the tunnel.
 
 ---
 
