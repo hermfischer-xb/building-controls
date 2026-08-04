@@ -558,6 +558,44 @@ onto the control network.
 `tools/discover.py` will dump any BACnet device's object map, so it is a
 reasonable starting point for adapting this to other equipment.
 
+### If Wi-Fi cannot be made good enough: MS/TP over the old LonWorks wiring
+
+Buildings converted from LonWorks often still have twisted pair running to every
+thermostat, and the TC500A does speak BACnet MS/TP (Config → Connection → BACnet
+MS/TP; it auto-detects baud). Before anyone plans around that, four things
+determined by measurement rather than optimism:
+
+- **`bacpypes3` has no MS/TP link layer.** Version 0.0.106 ships `ipv4`, `ipv6`
+  and `sc` only. This gateway cannot drive an RS-485 segment directly, and that
+  is not a small patch.
+- **It does not need to.** A BACnet MS/TP-to-IP router puts the segment on the IP
+  network, and `bacpypes3` addresses devices behind it natively:
+  `Address("2:5")` parses as `RemoteStation 2:5`. So `address: "2:5"` in
+  `devices.yaml` reaches MS/TP station 5 on network 2 **with no code changes** —
+  the transport problem is solved by buying a router, not by writing one.
+- **The TC500A-N cannot do both at once**, and its BACnet/IP is Wi-Fi only. Any
+  unit moved to MS/TP leaves the wireless network entirely. A mixed fleet is
+  fine — the gateway would simply have some devices addressed by IP and some by
+  `network:mac`.
+- **Polarity is the least of the wiring risks.** RS-485 is polarity sensitive and
+  LonWorks FT-10 was not, but that is a consistency problem: get it backwards and
+  the device is silent, so swap the pair. The risks that actually sink these
+  conversions, in order:
+  1. **Topology.** FT-10 is free topology — stars, T-taps and spurs are all legal.
+     RS-485 requires a single linear daisy chain, 120 Ω at the two physical ends,
+     and stubs of inches. Home runs to a panel will not work reliably no matter
+     how carefully they are landed. **Trace the existing runs before committing.**
+  2. **No signal common.** FT-10 is transformer-coupled two-wire, so no reference
+     conductor was pulled. RS-485 needs receivers to stay inside a -7 V to +12 V
+     common-mode window, usually satisfied through shared building ground, but
+     not guaranteed across separate panels.
+  3. **Unshielded pair beside contactors.** Workable, helped considerably by
+     running the segment slower.
+
+The honest summary: the wire may well be reusable, the polarity is trivial, the
+topology is the question that decides it, and the gateway needs a router
+appliance either way.
+
 ## Roadmap
 
 The near-term work is a **driver abstraction** — extracting the TC500A-specific

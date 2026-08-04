@@ -16,7 +16,10 @@ from pydantic import BaseModel, Field, field_validator
 
 class DeviceConfig(BaseModel):
     device_id: int = Field(description="BACnet device object instance, unique per unit")
-    address: str = Field(description="IP or IP:port of the thermostat")
+    address: str = Field(
+        description="IP, IP:port, or 'network:mac' for a device behind a BACnet router "
+        "(e.g. '2:5' for MS/TP station 5 on network 2)"
+    )
     name: str = Field(description="human label, e.g. 'Room 301'")
     zone: str = Field(default="default", description="groups devices for tenant permissions")
     mac: str | None = Field(
