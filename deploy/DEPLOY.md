@@ -562,51 +562,64 @@ Anyone on the internet can currently reach its login page, and Shodan indexes
 hosts like it continuously. This is the largest single risk in the building, and
 it is larger than anything in this application.
 
-### Do these in order — the order is the point
+### The fix is one static IP change on the panel itself
 
-**1. Give it a LAN address** (e.g. `192.168.144.65`) and point the gateway at it:
+**Give it a private static address on the office LAN — `192.168.1.65` or
+similar — and change nothing else.** No tunnel, no Cloudflare Access, no
+firewall rules, no router reprogramming.
 
 ```yaml
 truportal:
-  host: 192.168.144.65
+  host: 192.168.1.65
 ```
 
-The gateway reaches it directly over the LAN. **It does not need the tunnel for
-this** — the tunnel exists only for humans using the TruPortal admin UI.
+That is the whole thing. The public address is configured *on the panel*, so
+taking it off the internet is done on the panel, not in the AT&T router — which
+matters here because that router is not readily reprogrammable.
 
-**2. Remove the public IP mapping at the firewall.** This is the step that
-actually removes the risk. Everything else is convenience.
+**Why the office LAN and not the thermostat network.** The panel needs a default
+gateway for anything outbound it does (NTP, SMTP alerts), and the isolated
+control segment deliberately has no route off it. `192.168.1.0/24` has the
+router as its gateway, so the panel gets outbound NAT and no inbound path, which
+is exactly the shape wanted. Put it outside the DHCP pool, or reserve it, so
+nothing else takes the address.
 
-**3. Only then decide whether to expose the admin UI at all.**
+The gateway reaches it from its office-LAN interface. Nothing about the BACnet
+side changes.
 
-### A tunnel is not a security control
+### Remote administration: use the mini, not a tunnel
 
-Publishing `truportal.16400ventura.com` through the tunnel with no policy in
-front does **not** protect the appliance. It moves the front door from an IP
-address to a hostname, and Certificate Transparency publishes every hostname
-that gets a certificate within hours — so it trades discovery-by-IP-scan for
-discovery-by-CT-log, which is if anything faster. The unpatched 2020 HTTP stack
-is still answering strangers; they just spell its address differently.
+There is no reason to publish this panel at all. **Remote into the mini and use
+its browser** — it is already on the inside network, and remote access to it is
+already solved and already protected.
 
-What makes it safe is **Cloudflare Access in front of that hostname**.
-Unauthenticated requests are then terminated at Cloudflare's edge and never
-reach the appliance at all — its own login page stops being internet-reachable
-even though the hostname resolves. Two seats, you and the building manager.
+This is strictly better than the alternative, not merely simpler: nothing is
+published, no hostname enters a Certificate Transparency log, and there is no
+Access policy that can be misconfigured into an open door. It also needs no
+Cloudflare seats.
 
-So: **do not create the `truportal` tunnel hostname without an Access policy on
-it.** Publishing it unprotected is worse than the public IP it replaces, because
-it looks solved.
+**Do not put this panel behind a tunnel hostname.** If you ever reconsider,
+understand what a tunnel does and does not do: publishing
+`truportal.16400ventura.com` with no policy in front moves the front door from
+an IP address to a hostname, and CT logs publish that hostname within hours — so
+it trades discovery-by-IP-scan for discovery-by-CT-log, which is faster. Only
+Cloudflare Access in front of it would make that safe, by terminating
+unauthenticated requests at the edge. Since remoting into the mini already
+solves the problem, that is complexity bought for nothing.
 
-### Consider not exposing it at all
+### Verify it, from outside
 
-Ask what still needs the TruPortal UI once this application is running. Door
-unlock and lighting are already here, passkey-gated and role-scoped. What is
-left is badge and cardholder administration — infrequent, and doable on site or
-through the tunnel only when you enable it.
+Changing the address is not evidence the exposure is gone. From a phone on
+cellular, with Wi-Fi off:
 
-The strongest posture is a LAN address, no public mapping, no tunnel hostname,
-and on-site access when badges change. The next strongest is a tunnel hostname
-behind Access. Both are enormously better than today.
+```bash
+curl -sS --max-time 10 -k https://<the old public IP>/     # want a timeout
+```
+
+A timeout or refused connection is the result. A login page means something —
+an IP passthrough setting, a DMZ host, or a port forward — is still pointing at
+it. Check the router for a forward aimed at the panel's *new* address too, since
+a rule written against `192.168.1.65` would re-expose it just as effectively.
 
 ### What this does and does not fix
 
@@ -615,8 +628,11 @@ appliance. That is the whole threat model for a device with a public IP.
 
 Not fixed, and worth knowing:
 
-- **Anyone already on the building LAN can still reach it.** A VLAN limits that
-  to the mini. Until then, a compromised laptop on the office network is inside.
+- **Anyone already on the office LAN can still reach it.** That is the trade for
+  keeping it somewhere with a default gateway, and it is a good trade against a
+  public IP. If tenants are ever put on this same network rather than their own
+  SSID, revisit it — a VLAN or a segment of its own would then be worth the
+  complexity.
 - **`truportal.password` is still cleartext** in `config/devices.yaml` (mode 600).
   A LAN address reduces who can use it; it does not stop someone who reads it.
 - **The mini becomes the only remote path to the panel.** Acceptable — on-site

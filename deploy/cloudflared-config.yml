@@ -11,7 +11,12 @@
 #   cloudflared tunnel login
 #   cloudflared tunnel create building-controls
 #   cloudflared tunnel route dns building-controls controls.16400ventura.com
-#   cloudflared tunnel route dns building-controls truportal.16400ventura.com
+#
+# One hostname only. If a truportal.16400ventura.com record was created earlier,
+# delete it -- a DNS name pointing at a tunnel with no matching ingress rule
+# returns the 404 below, but the name itself is in Certificate Transparency
+# forever and invites probing for an appliance that should not be findable.
+# See the "No TruPortal entry here" note in the ingress list.
 #   sudo cloudflared service install        # LaunchDaemon, starts at boot
 #
 # Verify with:  cloudflared tunnel info building-controls
@@ -33,31 +38,24 @@ ingress:
   - hostname: controls.16400ventura.com
     service: http://127.0.0.1:8237
 
-  # --- TruPortal admin UI, OPTIONAL and Access-gated -------------------------
+  # --- No TruPortal entry here, on purpose ----------------------------------
   #
-  # Commented out by default, deliberately. Two things to understand first:
+  # The access panel is NOT published. It sits on a private static address
+  # (192.168.1.65) and is administered by remoting into this machine and using
+  # its browser -- it is already inside the network, and remote access to it is
+  # already solved and already protected.
   #
-  # 1. The gateway does NOT use this. It reaches the panel directly on the LAN
-  #    via `truportal.host` in devices.yaml. This entry exists only so a human
-  #    can reach the panel's own admin UI for badge administration.
+  # The gateway does not need an entry either: it reaches the panel directly over
+  # the LAN via `truportal.host` in devices.yaml. Nothing about doors or lighting
+  # in the app depends on anything in this file.
   #
-  # 2. Publishing this hostname without a Cloudflare Access policy on it is
-  #    WORSE than the public IP it replaces. It does not hide the appliance --
-  #    it renames it, and Certificate Transparency publishes the new name within
-  #    hours. An unpatched 2020 appliance still answers strangers; it just has a
-  #    prettier address, and it looks solved.
-  #
-  # So: put Access on truportal.16400ventura.com FIRST, confirm an unauthenticated
-  # request is refused at the edge, and only then uncomment this.
-  #
-  # noTLSVerify because it carries a self-signed certificate and, with Interlogix
-  # gone, there is no path to a trusted one. That is acceptable only over the LAN
-  # hop between cloudflared and the panel, which does not cross the internet.
-  #
-  # - hostname: truportal.16400ventura.com
-  #   service: https://192.168.144.65
-  #   originRequest:
-  #     noTLSVerify: true
+  # If someone later proposes publishing truportal.16400ventura.com, the thing to
+  # know is that a tunnel is not a security control. It moves the front door from
+  # an IP address to a hostname, and Certificate Transparency publishes that
+  # hostname within hours -- faster discovery than IP scanning, on an appliance
+  # with no vendor and no patches since 2020. Only Cloudflare Access in front of
+  # it would make that safe. Remoting into this machine already solves the
+  # problem, so that is complexity bought for nothing.
 
   # Required catch-all: anything else gets refused rather than proxied.
   - service: http_status:404
