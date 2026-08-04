@@ -146,6 +146,10 @@ def main() -> None:
 
     p = sub.add_parser("passwd", help="set a password and revoke existing sessions")
     p.add_argument("username")
+    p.add_argument("--no-change-required", action="store_true",
+                   help="skip the forced change at next sign-in. Correct when you are "
+                        "resetting your OWN password -- this is the lockout recovery "
+                        "path, and being told to change what you just chose is absurd")
 
     p = sub.add_parser("zones", help="replace a user's zone list")
     p.add_argument("username")
@@ -211,12 +215,16 @@ def main() -> None:
 
         if args.command == "passwd":
             password, generated = prompt_password(args.username)
-            if not auth.set_password(args.username, password, actor="cli"):
+            if not auth.set_password(args.username, password, actor="cli",
+                                     must_change=not args.no_change_required):
                 print(f"No user {args.username!r}.", file=sys.stderr)
                 raise SystemExit(1)
             print(f"Password updated for {args.username!r}; existing sessions revoked.")
             if generated:
                 print(f"\n  Password: {password}\n")
+            if not args.no_change_required:
+                print(f"{args.username} will be asked to choose their own at next "
+                      f"sign-in. Pass --no-change-required if this is your own account.")
             return
 
         if args.command == "zones":

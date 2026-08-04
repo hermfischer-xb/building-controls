@@ -21,6 +21,10 @@ from ..schedules import DAYS
 from . import pages
 
 
+# Sentinel: distinguishes "the middleware cached None" from "nothing cached".
+_MISSING = object()
+
+
 def build_router(
     cfg,
     cache,
@@ -36,6 +40,14 @@ def build_router(
     router = APIRouter(include_in_schema=False)
 
     def visitor(request: Request):
+        # The force-password-change middleware already resolved this session for
+        # page GETs and left it on request.state. Reusing it avoids a second
+        # identical lookup on every page load. `_MISSING` rather than None as the
+        # default, because None is a real answer here -- "resolved, nobody signed
+        # in" must not fall through to resolving again.
+        cached = getattr(request.state, "session_user", _MISSING)
+        if cached is not _MISSING:
+            return cached
         token = request.cookies.get(COOKIE_NAME)
         return auth.resolve_session(token) if token else None
 

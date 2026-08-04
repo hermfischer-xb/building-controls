@@ -88,10 +88,6 @@ class UserRequest(BaseModel):
                              description="zones a tenant may act on; ignored for manager/admin")
 
 
-class PasswordRequest(BaseModel):
-    password: str = Field(min_length=8)
-
-
 class ChangePasswordRequest(BaseModel):
     current_password: str
     # The two-field confirmation is enforced in the browser, where a mismatch can
@@ -172,10 +168,15 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     async def force_password_change(request: Request, call_next):
         path = request.url.path
         is_page = path == "/" or path.startswith(PAGE_PREFIXES)
-        if request.method == "GET" and is_page and path != "/ui/password":
+        if request.method == "GET" and is_page:
             token = request.cookies.get(COOKIE_NAME)
             user = auth.resolve_session(token) if token else None
-            if user is not None and user.must_change_password:
+            # Stashed so the page route does not resolve the same session a
+            # second time. Two SQLite lookups per page load is cheap, but the
+            # dashboard reloads itself every 15 seconds, so this is the hottest
+            # path in the app and the saving is free.
+            request.state.session_user = user
+            if user is not None and user.must_change_password and path != "/ui/password":
                 return RedirectResponse("/ui/password", status_code=303)
         return await call_next(request)
     throttle = LoginThrottle()
@@ -1198,16 +1199,30 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
     @app.put("/users/{username}/password")
     async def set_password(
-        username: str, body: PasswordRequest, user: User = Depends(require("admin"))
+        username: str, user: User = Depends(require("admin"))
     ) -> dict[str, Any]:
+        """Reset someone's password to a fresh one-time value.
+
+        Takes no body, for the same reason `POST /users` does not: an admin who
+        chooses a password knows a credential belonging to someone else, and a
+        human-chosen one may be weak or reused besides. `set_password` already
+        marks it must-change when the actor is not the owner, so this closes the
+        remaining half -- the *value* no longer comes from the caller either.
+        """
+        password = generate_password()
         try:
             if not await asyncio.to_thread(
-                auth.set_password, username, body.password, user.username
+                auth.set_password, username, password, user.username
             ):
                 raise HTTPException(404, f"no user {username}")
         except ValueError as err:
             raise HTTPException(400, str(err)) from err
-        return {"username": username, "sessions_revoked": True}
+        return {
+            "username": username,
+            "password": password,
+            "must_change_password": True,
+            "sessions_revoked": True,
+        }
 
     @app.put("/users/{username}/zones")
     async def set_zones(

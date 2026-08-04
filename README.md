@@ -317,10 +317,16 @@ match is checked in the browser, because the server is sent a single value and
 cannot compare two — a confirmation field is only meaningful where both are
 visible.
 
-Administrative resets (`useradmin passwd`, `PUT /users/{u}/password`) set the same
-flag, on the same reasoning: whoever performed the reset knows the password.
-`useradmin add-* --no-change-required` opts out and is correct only when creating
-your own account.
+Administrative resets work the same way. `PUT /users/{u}/password` takes **no
+body** — it generates a fresh one-time password, returns it once, and marks the
+account must-change, exactly as creation does. Setting the flag alone would not
+have been enough: an admin who *chooses* the password still knows it, and a
+human-chosen one may be weak or reused besides.
+
+`--no-change-required` on `useradmin add-*` and `useradmin passwd` opts out, and
+is correct only when the account is your own — `passwd` is the lockout recovery
+path, where being told to change the password you just deliberately set is
+absurd.
 
 `tools/test_passwords.py` covers the lifecycle end to end — that the password is
 generated rather than accepted from the caller, that it unlocks nothing but the

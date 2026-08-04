@@ -356,6 +356,33 @@ transmit power *down* — high power everywhere makes clients cling to a distant
 instead of roaming to the near one, which produces exactly this symptom. The Link
 quality table gives a before/after measurement per suite.
 
+### The overnight data says floor 2, not one bad thermostat
+
+Recovered on the mini from `/usr/local/var/log/building-controls.log`, 22:00
+Aug 3 → 06:14 Aug 4, an empty building with nobody's laptops or phones competing.
+Offline *transitions* per unit:
+
+```
+7  Suite 205   floor-2      4  Suite 231   floor-2
+6  Suite 221   floor-2      2  Suite 207   floor-2
+5  Suite 339   floor-3      1  Suite 340   floor-3
+```
+
+**4 of 5 floor-2 units dropped overnight, against 2 of 11 on floor 3.** Suite 339
+looked like the outlier on a single ping test; it is third, and the real pattern
+is by floor.
+
+Drops continued at a steady 2–5 per hour with the building empty, which rules out
+contention from people and their devices.
+
+So the obvious first experiment — pull 339 off its subbase and look for metal in
+the wall — is the wrong one. **Start with the floor-2 access point and the 2.4 GHz
+channel plan.** Neither is fixed by swapping a thermostat.
+
+Note the per-device counters in the Link quality table reset on restart, so for
+anything spanning a restart the log is the better source: it records transitions,
+which survive.
+
 ## Still open, in priority order
 
 0. ~~Restart the gateway~~ — **done 2026-08-03 18:14.** The second half is not:

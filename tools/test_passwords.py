@@ -93,15 +93,29 @@ async def main():
         check((await t.get("/me")).json()["must_change_password"] is False,
               "the flag is cleared")
 
+    print("\n=== an admin reset ===")
+    async with httpx.AsyncClient(transport=T, base_url="http://t",
+                                 follow_redirects=False) as c:
+        await c.post("/login", data={"username":"admin","password":"adminpass1234"})
+        r = await c.put("/users/suite301/password")
+        check(r.status_code == 200, f"reset accepted with no body ({r.status_code})")
+        reset_pw = r.json().get("password", "")
+        check(len(reset_pw) == 16, "a fresh one-time password is returned")
+        check(r.json().get("must_change_password") is True, "flagged as must-change")
+        # The whole point: the admin cannot pick the value.
+        r = await c.put("/users/suite301/password", json={"password": "admin-picked-1"})
+        check(r.status_code == 200 and r.json()["password"] != "admin-picked-1",
+              "a supplied password is ignored on reset too")
+
     print("\n=== afterwards ===")
     async with httpx.AsyncClient(transport=T, base_url="http://t",
                                  follow_redirects=False) as t2:
         r = await t2.post("/login", data={"username":"suite301","password":pw})
-        check(r.status_code == 401, "the old one-time password no longer works")
+        check(r.status_code == 401, "the original one-time password no longer works")
         r = await t2.post("/login", data={"username":"suite301",
                                           "password":"chosen-by-me-1234"})
-        check(r.status_code == 303 and r.headers["location"] == "/",
-              "the new password signs in normally")
+        check(r.status_code == 401,
+              "the password chosen before the reset no longer works either")
 
     print(f"\n{'ALL PASS' if not fail else f'{fail} FAILURE(S)'} ({ok+fail} checks)")
     return 1 if fail else 0
