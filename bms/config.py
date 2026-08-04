@@ -152,6 +152,21 @@ class Config(BaseModel):
     # recorded a transition. On Wi-Fi that is a routine event, not an outage.
     # 3 means roughly a minute and a half at a 30 s interval.
     offline_after_failures: int = Field(default=3, ge=1)
+
+    # How many devices may be polled at once.
+    #
+    # 1 is the historical behaviour and the safe default. Raising it stops one
+    # slow device delaying every device behind it, which matters most when a
+    # request can spend six seconds retrying: sequentially those add up, in
+    # parallel the cycle is roughly the slowest device rather than the sum.
+    #
+    # Raise it carefully on Wi-Fi. The medium is shared and half duplex, so
+    # firing every request at once is exactly the wrong shape of traffic for a
+    # congested access point -- it can turn a unit that drops occasionally into
+    # one that drops constantly. 3 or 4 captures most of the benefit without
+    # bursting. Watch avg_poll_ms in the Link quality table after changing it: if
+    # it rises, the network is contending and the number is too high.
+    poll_concurrency: int = Field(default=1, ge=1, le=32)
     api_host: str = Field(
         default="127.0.0.1",
         description="bind address. Never 0.0.0.0 on a host with a public interface.",

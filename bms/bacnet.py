@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import time
+from contextlib import asynccontextmanager
 from typing import Any
 
 from bacpypes3.apdu import ErrorRejectAbortNack, TimeSynchronizationRequest
@@ -86,13 +88,48 @@ def _unwrap(value: Any) -> Any:
 
 
 class BacnetClient:
-    def __init__(self, cfg: BacnetConfig, request_timeout: float = 5.0) -> None:
+    def __init__(self, cfg: BacnetConfig, request_timeout: float = 5.0,
+                 concurrency: int = 1) -> None:
         self._cfg = cfg
         self._timeout = request_timeout
         self._app: Application | None = None
-        # BACnet/IP is one UDP socket. Serialise requests so a burst of writes
-        # from the API cannot interleave with a poll and confuse the responses.
-        self._lock = asyncio.Lock()
+
+        # One UDP socket, but that is not a reason to serialise. BACnet matches
+        # each response to its request on (invokeID, source address), and
+        # bacpypes3 keeps a list of live transactions demultiplexed exactly that
+        # way, so several requests to *different* devices may be outstanding at
+        # once -- the same trick a browser uses to fetch many small images.
+        #
+        # Two locks, in a fixed order, because the wins and the hazards differ:
+        #
+        #   per device  -- a thermostat is a small embedded device and should be
+        #                  assumed to handle one transaction at a time, so a
+        #                  reconciler write must not overlap a poll read of the
+        #                  same unit.
+        #   global      -- a bound on how many are in flight across the fleet.
+        #                  Left at 1 this behaves exactly as the old single lock
+        #                  did. Raised, it stops one slow device delaying every
+        #                  device behind it, which matters now that a retrying
+        #                  request can take six seconds.
+        #
+        # Device lock first, then the semaphore, always. The other order
+        # deadlocks: a task holding the semaphore could block on a device lock
+        # held by a task waiting for the semaphore.
+        self._gate = asyncio.Semaphore(max(1, concurrency))
+        self._device_locks: dict[str, asyncio.Lock] = {}
+        self._concurrency = max(1, concurrency)
+
+    @property
+    def concurrency(self) -> int:
+        return self._concurrency
+
+    @asynccontextmanager
+    async def _request(self, address: str):
+        """Hold the right to talk to one device, within the fleet-wide bound."""
+        lock = self._device_locks.setdefault(address, asyncio.Lock())
+        async with lock:
+            async with self._gate:
+                yield
 
     async def start(self) -> None:
         args = _Args(
@@ -143,8 +180,8 @@ class BacnetClient:
             raise RuntimeError("BacnetClient.start() not called")
         return self._app
 
-    async def read_points(self, device: DeviceConfig) -> dict[str, Any]:
-        """Read every polled point in a single read-property-multiple request.
+    async def read_points_timed(self, device: DeviceConfig) -> tuple[dict[str, Any], float]:
+        """Read every polled point in one request; return values and round-trip ms.
 
         Measured at ~19ms for 16 points against a real TC500A, versus ~197ms doing
         them individually, so this is what keeps a 25-device poll under a second.
@@ -153,7 +190,12 @@ class BacnetClient:
         for point in POINTS:
             parameter_list += [point.objid, ["presentValue"]]
 
-        async with self._lock:
+        async with self._request(device.address):
+            # Timed inside the gate on purpose. Measured outside it, the figure
+            # would include time queued behind other devices, which would make
+            # the Link quality table report contention as though it were a slow
+            # radio link -- the opposite of what it is for.
+            started = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
                     self.app.read_property_multiple(Address(device.address), parameter_list),
@@ -161,6 +203,7 @@ class BacnetClient:
                 )
             except BACNET_FAULTS as err:
                 raise DeviceUnreachable(f"{device.name} ({device.address}): {_describe(err)}") from err
+            elapsed_ms = (time.perf_counter() - started) * 1000
 
         values: dict[str, Any] = {}
         for objid, _prop, _index, value in result:
@@ -171,6 +214,11 @@ class BacnetClient:
                 log.warning("%s %s: %s", device.name, point.key, value)
                 continue
             values[point.key] = _unwrap(value)
+        return values, elapsed_ms
+
+    async def read_points(self, device: DeviceConfig) -> dict[str, Any]:
+        """Values only, for callers that do not record timing."""
+        values, _ = await self.read_points_timed(device)
         return values
 
     async def write_point(self, device: DeviceConfig, point: Point, value: Any) -> None:
@@ -184,7 +232,7 @@ class BacnetClient:
         if not point.writable:
             raise ValueError(f"{point.key} is read-only")
 
-        async with self._lock:
+        async with self._request(device.address):
             try:
                 await asyncio.wait_for(
                     self.app.write_property(
@@ -205,7 +253,7 @@ class BacnetClient:
 
     async def read_device_time(self, device: DeviceConfig) -> dt.datetime | None:
         """Read the device clock, or None if it cannot be read or is unset."""
-        async with self._lock:
+        async with self._request(device.address):
             try:
                 date = await asyncio.wait_for(
                     self.app.read_property(
@@ -247,7 +295,7 @@ class BacnetClient:
             )
         )
         request.pduDestination = Address(device.address)
-        async with self._lock:
+        async with self._request(device.address):
             self.app.request(request)
 
     async def read_device_id(self, device: DeviceConfig) -> int | None:
@@ -259,7 +307,7 @@ class BacnetClient:
         answers it, so a device that rejects it must not look unreachable.
         """
         for objid in (f"device,{device.device_id}", "device,4194303"):
-            async with self._lock:
+            async with self._request(device.address):
                 try:
                     oid = await asyncio.wait_for(
                         self.app.read_property(
@@ -279,7 +327,7 @@ class BacnetClient:
     # rules, and the device honours a referenced calendar within ~3 seconds.
 
     async def read_calendar(self, device: DeviceConfig, objid: str) -> list[dict]:
-        async with self._lock:
+        async with self._request(device.address):
             entries = await asyncio.wait_for(
                 self.app.read_property(Address(device.address), objid, "dateList"),
                 timeout=self._timeout,
@@ -289,7 +337,7 @@ class BacnetClient:
     async def write_calendar(
         self, device: DeviceConfig, objid: str, entries: list[CalendarEntry]
     ) -> None:
-        async with self._lock:
+        async with self._request(device.address):
             try:
                 try:
                     await asyncio.wait_for(
@@ -306,7 +354,7 @@ class BacnetClient:
                 ) from err
 
     async def read_weekly_schedule(self, device: DeviceConfig, objid: str) -> Any:
-        async with self._lock:
+        async with self._request(device.address):
             try:
                 return await asyncio.wait_for(
                     self.app.read_property(Address(device.address), objid, "weeklySchedule"),
@@ -326,7 +374,7 @@ class BacnetClient:
         whole thing; writing a single day by array index is not something this
         firmware was tested against, so always send the full week.
         """
-        async with self._lock:
+        async with self._request(device.address):
             try:
                 await asyncio.wait_for(
                     self.app.write_property(
@@ -342,7 +390,7 @@ class BacnetClient:
     async def write_exception_schedule(
         self, device: DeviceConfig, objid: str, events: list[SpecialEvent]
     ) -> None:
-        async with self._lock:
+        async with self._request(device.address):
             try:
                 await asyncio.wait_for(
                     self.app.write_property(

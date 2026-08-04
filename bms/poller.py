@@ -1,8 +1,23 @@
 """The poll loop.
 
-Devices are polled sequentially rather than concurrently, on purpose: there is one
-UDP socket and one lock in BacnetClient, so concurrency here would only queue up
-behind that lock while making failure attribution harder.
+Sequential by default, and optionally concurrent. The single UDP socket is not a
+reason to serialise: BACnet matches each response to its request on (invokeID,
+source address) and bacpypes3 demultiplexes exactly that way, so requests to
+different devices may be outstanding at once. What used to serialise everything
+was a lock in BacnetClient, which this file's own comment then cited as the
+reason concurrency would not help -- circular, since the lock was ours.
+
+`poll_concurrency` now governs it, defaulting to 1 so the behaviour is unchanged
+until someone opts in. Above 1 the devices are gathered and the client bounds how
+many are actually in flight; it also serialises per device, so a reconciler write
+never overlaps a poll read of the same thermostat.
+
+The reason to raise it is that a slow device otherwise delays every device behind
+it, and since retries were enabled a request can take six seconds. Sequentially
+those add up; in parallel a cycle is roughly the slowest device rather than the
+sum. The reason to be careful is that Wi-Fi is shared and half duplex, so a burst
+of simultaneous requests is the wrong shape of traffic for a congested access
+point -- watch avg_poll_ms after changing it.
 
 **Budget a cycle from measured round-trips, not from the RPM figure.** This file
 used to claim 19 ms per device, and therefore half a second for 25 devices, which
@@ -126,45 +141,57 @@ class Poller:
             await asyncio.sleep(max(0.0, self._cfg.poll_interval_seconds - elapsed))
 
     async def poll_once(self) -> None:
-        for device in self._cfg.devices:
-            started = time.perf_counter()
-            try:
-                values = await self._client.read_points(device)
-                # Timed per device, because the fleet average hides the problem:
-                # a unit on a weak signal is slow while its neighbours are fine,
-                # and this is the only link-quality signal available -- the
-                # thermostats do not expose Wi-Fi RSSI over BACnet.
-                # Copy the count, do not hold the object: `Cache.get` returns the
-                # live DeviceState and `record_success` zeroes
-                # `consecutive_failures` on it in place, so reading the attribute
-                # afterwards always yields 0.
-                state = self._cache.get(device.device_id)
-                missed = state.consecutive_failures if state else 0
-                self._cache.record_success(
-                    device.device_id, values, (time.perf_counter() - started) * 1000
+        """One pass over the fleet.
+
+        Sequential at `poll_concurrency: 1`, which is the default and the
+        historical behaviour. Above that the devices are gathered and the client
+        bounds how many are actually in flight, so concurrency is configured in
+        exactly one place rather than negotiated between two.
+        """
+        if self._cfg.poll_concurrency <= 1:
+            for device in self._cfg.devices:
+                await self._poll_device(device)
+            return
+        await asyncio.gather(*(self._poll_device(d) for d in self._cfg.devices))
+
+    async def _poll_device(self, device) -> None:
+        try:
+            # Timed by the client, inside its gate, so a device queued behind
+            # others is not recorded as a slow one. Per device rather than
+            # per cycle because the fleet average hides the case of interest:
+            # one unit on a weak signal among healthy neighbours. It is the
+            # only link-quality signal available -- the thermostats do not
+            # expose Wi-Fi RSSI over BACnet.
+            values, elapsed_ms = await self._client.read_points_timed(device)
+            # Copy the count, do not hold the object: `Cache.get` returns the
+            # live DeviceState and `record_success` zeroes
+            # `consecutive_failures` on it in place, so reading the attribute
+            # afterwards always yields 0.
+            state = self._cache.get(device.device_id)
+            missed = state.consecutive_failures if state else 0
+            self._cache.record_success(device.device_id, values, elapsed_ms)
+            if missed:
+                # Recovery is worth a line at info: it distinguishes a unit
+                # that flickers from one that is genuinely down, which is the
+                # whole question when chasing a marginal radio link. With
+                # `offline_after_failures` above 1 this is the *only* place a
+                # flickering unit appears in the log at all, so the number
+                # has to be right.
+                log.info("%s answered again after %d missed poll(s)",
+                         device.name, missed)
+        except DeviceUnreachable as err:
+            self._cache.record_failure(device.device_id, str(err))
+            state = self._cache.get(device.device_id)
+            # Log the transition into offline, not every cycle, or an offline
+            # thermostat produces a line every interval forever. Recorded
+            # first so the threshold is tested against the new count: firing
+            # on the *first* miss is what filled the log with units that had
+            # simply lost a datagram and were fine on the next pass.
+            if state and state.consecutive_failures == self._cfg.offline_after_failures:
+                log.warning(
+                    "%s went offline after %d consecutive failures: %s",
+                    device.name, state.consecutive_failures, err,
                 )
-                if missed:
-                    # Recovery is worth a line at info: it distinguishes a unit
-                    # that flickers from one that is genuinely down, which is the
-                    # whole question when chasing a marginal radio link. With
-                    # `offline_after_failures` above 1 this is the *only* place a
-                    # flickering unit appears in the log at all, so the number
-                    # has to be right.
-                    log.info("%s answered again after %d missed poll(s)",
-                             device.name, missed)
-            except DeviceUnreachable as err:
-                self._cache.record_failure(device.device_id, str(err))
-                state = self._cache.get(device.device_id)
-                # Log the transition into offline, not every cycle, or an offline
-                # thermostat produces a line every interval forever. Recorded
-                # first so the threshold is tested against the new count: firing
-                # on the *first* miss is what filled the log with units that had
-                # simply lost a datagram and were fine on the next pass.
-                if state and state.consecutive_failures == self._cfg.offline_after_failures:
-                    log.warning(
-                        "%s went offline after %d consecutive failures: %s",
-                        device.name, state.consecutive_failures, err,
-                    )
-            except Exception:  # noqa: BLE001 - one bad device must not kill the loop
-                log.exception("unexpected error polling %s", device.name)
-                self._cache.record_failure(device.device_id, "internal error")
+        except Exception:  # noqa: BLE001 - one bad device must not kill the loop
+            log.exception("unexpected error polling %s", device.name)
+            self._cache.record_failure(device.device_id, "internal error")

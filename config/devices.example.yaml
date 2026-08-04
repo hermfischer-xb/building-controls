@@ -60,6 +60,25 @@ request_timeout_seconds: 7
 # early warning the old behaviour buried in noise.
 offline_after_failures: 3
 
+# How many devices to poll at once. 1 is the historical behaviour.
+#
+# The single UDP socket is not a reason to serialise -- BACnet matches responses
+# to requests on (invokeID, source address), so several can be outstanding at
+# once. Raising this stops one slow device delaying every device behind it, which
+# matters since retries were enabled: a retrying request takes up to 6 s, and
+# sequentially those add up.
+#
+# Modelled with 16 devices at 640 ms and four dark units burning the full retry
+# budget: 31.7 s at concurrency 1 -- over the 30 s window -- against 9.9 s at 4.
+#
+# Raise it carefully on Wi-Fi. The medium is shared and half duplex, so firing
+# every request at once is the wrong shape of traffic for a congested access
+# point and can make loss worse. 3 or 4 gets most of the benefit. After changing
+# it, watch avg_poll_ms in the Link quality table: that figure excludes time
+# queued behind other devices, so if it rises the network is contending and this
+# number is too high.
+poll_concurrency: 1
+
 # Loopback only. This host has a public static IP; the web app must never be
 # reachable on it. Remote access goes over Tailscale/WireGuard.
 api_host: 127.0.0.1

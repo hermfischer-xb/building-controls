@@ -552,6 +552,7 @@ tools/
   test_passkeys.py  passkey security properties, against a software authenticator
   test_passwords.py one-time passwords: generated, forced change, single use
   test_pages.py     renders every page and parses its JavaScript with node
+  test_concurrency.py  models the poll cycle against poll_concurrency
   devices_from_csv.py  a spreadsheet of thermostats -> the devices: block
   truportal_soap.py    raw SOAP calls, for exploring the panel
 deploy/
