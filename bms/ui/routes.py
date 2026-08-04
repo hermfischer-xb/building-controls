@@ -67,6 +67,15 @@ def build_router(
         user = visitor(request)
         if user is None:
             return signin(request)
+        # A tenant with a single suite should land on it, not on a table with one
+        # row. `controls.16400ventura.com` is the link they are given, and the
+        # dashboard is an operator's screen -- the tenant page is the one built
+        # for a phone, and it carries the same doors and lights.
+        if user.role == "tenant":
+            mine = visible_devices(user)
+            if len(mine) == 1:
+                return RedirectResponse(f"/t/{mine[0]['device_id']}", status_code=303)
+
         status = reconciler.status if user.at_least("manager") else None
         # Doors and lights belong on the page people actually land on. Reaching
         # them only from /t/{device} meant anyone who signed in without a

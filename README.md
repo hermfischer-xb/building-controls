@@ -323,8 +323,31 @@ spins while running and respects `prefers-reduced-motion`.
 | Reconcile, audit log | | ✅ | ✅ |
 | Create and remove users | | | ✅ |
 
-Tenants are scoped to **zones**. A device outside a tenant's zones returns 404,
-not 403 — they should not learn which other devices exist.
+### How a tenant is associated with their thermostat
+
+There is **no direct tenant-to-device link.** The association runs through a zone
+*name*, in two halves:
+
+| | set where |
+|---|---|
+| a device's zone | `config/devices.yaml` (`zone:`), overridable per device on **Zones** |
+| a user's zones | at account creation, or on **Users** / **Zones** |
+
+A tenant sees a device when `device.zone` is one of their zones. So **the zone is
+the unit of access**, and its granularity is entirely a naming decision:
+
+- Name zones by floor — `floor-3` — and a tenant granted `floor-3` can see and
+  control *every suite on that floor*. This is the mistake worth avoiding.
+- Give each thermostat its own zone — `suite-326` — and a tenant granted
+  `suite-326` gets exactly their own.
+
+Lighting triggers are matched the same way, and those genuinely are per floor, so
+a tenant usually wants **both**: `["suite-326", "floor-3"]` — their suite for the
+thermostat, their floor for the hallway lights. Users can hold any number of
+zones, and the creation form takes several.
+
+A device outside a tenant's zones returns 404, not 403 — they should not learn
+which other devices exist.
 
 ```bash
 .venv/bin/python -m bms.useradmin add-tenant suite301 --zones floor-3

@@ -936,7 +936,12 @@ def users(user, accounts: list[dict], zones: list[str]) -> str:
         for a in accounts
     )
 
-    zone_opts = "".join(f'<option value="{e(z)}">{e(z)}</option>' for z in zones)
+    zone_boxes = "".join(
+        f'<label style="display:inline-flex;align-items:center;gap:.3rem;'
+        f'margin:0 .7rem .3rem 0;color:inherit">'
+        f'<input type="checkbox" class="newzone" value="{e(z)}"> {e(z)}</label>'
+        for z in zones
+    )
     body = f"""
 <h1>Users</h1>
 <p class="lede">Tenants are scoped to zones and may only start conditioning in their
@@ -955,9 +960,15 @@ own suite. Managers run the building; admins also manage accounts.</p>
   <div><label for="urole">Role</label>
    <select id="urole"><option value="tenant">Tenant</option>
    <option value="manager">Manager</option><option value="admin">Admin</option></select></div>
-  <div><label for="uzone">Zone (tenants)</label>
-   <select id="uzone"><option value="">—</option>{zone_opts}</select></div>
   <button class="primary" onclick="addUser()">Create</button>
+ </div>
+ <div style="margin-top:.8rem">
+  <label>Zones (tenants only)</label>
+  <div>{zone_boxes or '<span class="sub">no zones defined yet</span>'}</div>
+  <p class="sub" style="margin:.35rem 0 0">A tenant sees every device in the zones
+     they hold, so grant the zone that means <em>their suite</em> — a floor-wide
+     zone gives them the whole floor. Lighting triggers are matched by zone too,
+     so a tenant usually needs their suite <em>and</em> their floor.</p>
  </div>
  <p class="sub">A one-time password is generated and shown here once. Hand it over,
     and the account must replace it at first sign-in — so nobody but its owner ends
@@ -984,14 +995,19 @@ function saveZones(username){{
       zones.length ? 'Zones updated' : 'All zones removed — tenant sees nothing');
 }}
 function addUser(){{
-  const zone = document.getElementById('uzone').value;
+  const zones = [...document.querySelectorAll('.newzone:checked')].map(b => b.value);
   const body = {{
     username: document.getElementById('uname').value.trim(),
     display_name: document.getElementById('udisp').value.trim(),
     role: document.getElementById('urole').value,
-    zones: zone ? [zone] : []
+    zones: zones
   }};
   if (!body.username) {{ toast('Username required', false); return; }}
+  // A tenant with no zones can sign in and see an empty page, which reads as a
+  // broken system rather than an unfinished one. Worth one question.
+  if (body.role === 'tenant' && !zones.length &&
+      !confirm('This tenant has no zones, so they will see no devices at all.\\n\\n'
+             + 'Create anyway?')) return;
   // Not act(): that reloads on success, which would wipe the one-time password
   // off the screen before anyone could read it.
   api('POST', '/users', body).then(out => {{
@@ -999,6 +1015,7 @@ function addUser(){{
     document.getElementById('issued-pass').textContent = out.password;
     document.getElementById('issued').style.display = 'block';
     ['uname','udisp'].forEach(id => document.getElementById(id).value = '');
+    document.querySelectorAll('.newzone:checked').forEach(b => b.checked = false);
     toast('Account created', true);
   }}).catch(err => toast(err.message, false));
 }}
