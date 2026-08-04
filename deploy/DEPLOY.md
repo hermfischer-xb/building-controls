@@ -222,7 +222,13 @@ sudo chmod 644       /Library/LaunchDaemons/com.building-controls.gateway.plist
 sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.gateway.plist
 
 sudo launchctl print system/com.building-controls.gateway | head -20
-curl -sS localhost:8237/health
+
+# Startup is not instant: the inventory check contacts every thermostat, and any
+# that does not answer costs the full BACnet retry budget before it gives up.
+# Measured on the mini with one dark unit out of sixteen: ~17 s. Poll until it
+# answers rather than sleeping a fixed number of seconds, which only has to be
+# retuned the next time a thermostat goes dark.
+until curl -fsS localhost:8237/health; do sleep 2; done
 ```
 
 Use `bootstrap`, not `load -w`. `load` is deprecated on macOS 15 and reports

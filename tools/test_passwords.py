@@ -102,10 +102,12 @@ async def main():
         reset_pw = r.json().get("password", "")
         check(len(reset_pw) == 16, "a fresh one-time password is returned")
         check(r.json().get("must_change_password") is True, "flagged as must-change")
-        # The whole point: the admin cannot pick the value.
+        # The whole point: the admin cannot pick the value. This resets again, so
+        # the password from here on is this one, not the one above.
         r = await c.put("/users/suite301/password", json={"password": "admin-picked-1"})
         check(r.status_code == 200 and r.json()["password"] != "admin-picked-1",
               "a supplied password is ignored on reset too")
+        reset_pw = r.json()["password"]
 
     print("\n=== afterwards ===")
     async with httpx.AsyncClient(transport=T, base_url="http://t",
@@ -116,6 +118,23 @@ async def main():
                                           "password":"chosen-by-me-1234"})
         check(r.status_code == 401,
               "the password chosen before the reset no longer works either")
+
+        # Walk the reset password all the way back to a normal sign-in. Without
+        # this the suite only ever asserts what stops working, and a bug that
+        # broke login outright would still pass every check above it.
+        r = await t2.post("/login", data={"username":"suite301","password":reset_pw})
+        check(r.status_code == 303 and r.headers["location"] == "/ui/password",
+              "the reset password works, and lands on the change form")
+        r = await t2.post("/me/password", json={"current_password":reset_pw,
+                                                "new_password":"final-choice-1234"})
+        check(r.status_code == 200, "it can be replaced")
+
+    async with httpx.AsyncClient(transport=T, base_url="http://t",
+                                 follow_redirects=False) as t3:
+        r = await t3.post("/login", data={"username":"suite301",
+                                          "password":"final-choice-1234"})
+        check(r.status_code == 303 and r.headers["location"] == "/",
+              "the new password signs in normally, straight to the dashboard")
 
     print(f"\n{'ALL PASS' if not fail else f'{fail} FAILURE(S)'} ({ok+fail} checks)")
     return 1 if fail else 0

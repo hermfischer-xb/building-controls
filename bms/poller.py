@@ -134,17 +134,24 @@ class Poller:
                 # a unit on a weak signal is slow while its neighbours are fine,
                 # and this is the only link-quality signal available -- the
                 # thermostats do not expose Wi-Fi RSSI over BACnet.
-                was_missing = (state := self._cache.get(device.device_id)) is not None \
-                    and state.consecutive_failures > 0
+                # Copy the count, do not hold the object: `Cache.get` returns the
+                # live DeviceState and `record_success` zeroes
+                # `consecutive_failures` on it in place, so reading the attribute
+                # afterwards always yields 0.
+                state = self._cache.get(device.device_id)
+                missed = state.consecutive_failures if state else 0
                 self._cache.record_success(
                     device.device_id, values, (time.perf_counter() - started) * 1000
                 )
-                if was_missing:
+                if missed:
                     # Recovery is worth a line at info: it distinguishes a unit
                     # that flickers from one that is genuinely down, which is the
-                    # whole question when chasing a marginal radio link.
+                    # whole question when chasing a marginal radio link. With
+                    # `offline_after_failures` above 1 this is the *only* place a
+                    # flickering unit appears in the log at all, so the number
+                    # has to be right.
                     log.info("%s answered again after %d missed poll(s)",
-                             device.name, state.consecutive_failures)
+                             device.name, missed)
             except DeviceUnreachable as err:
                 self._cache.record_failure(device.device_id, str(err))
                 state = self._cache.get(device.device_id)

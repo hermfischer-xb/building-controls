@@ -928,7 +928,9 @@ def users(user, accounts: list[dict], zones: list[str]) -> str:
  <td class="sub">{e(dt.datetime.fromtimestamp(a['last_login']).strftime('%d %b %H:%M')
                     if a.get('last_login') else 'never')}
      {chip('one-time password', 'warn') if a.get('must_change_password') else ''}</td>
- <td>{'' if a['username'] == user.username or not a['active'] else
+ <td>{'' if not a['active'] else
+      f'''<button onclick="resetPassword('{e(a['username'])}')">Reset password</button>'''}
+     {'' if a['username'] == user.username or not a['active'] else
       f'''<button class="danger" onclick="act('DELETE','/users/{e(a['username'])}',null,'Deactivated')">Deactivate</button>'''}</td>
 </tr>"""
         for a in accounts
@@ -962,7 +964,8 @@ own suite. Managers run the building; admins also manage accounts.</p>
     up knowing it. There is deliberately nowhere to type one in.</p>
  <div id="issued" style="display:none;margin-top:1rem;padding:1rem;border-radius:12px;
       background:color-mix(in srgb,var(--ok) 12%,transparent)">
-  <div class="sub">One-time password for <strong id="issued-user"></strong> — shown once</div>
+  <div class="sub">One-time password for <strong id="issued-user"></strong> — shown once.
+   They must replace it at next sign-in.</div>
   <div class="big" id="issued-pass"
        style="font-size:1.35rem;letter-spacing:.04em;user-select:all;word-break:break-all"></div>
   <button style="margin-top:.6rem" onclick="copyIssued()">Copy</button>
@@ -993,6 +996,22 @@ function addUser(){{
     document.getElementById('issued').style.display = 'block';
     ['uname','udisp'].forEach(id => document.getElementById(id).value = '');
     toast('Account created', true);
+  }}).catch(err => toast(err.message, false));
+}}
+function resetPassword(username){{
+  if (!confirm('Reset the password for ' + username + '?\n\n'
+             + 'Their current password stops working immediately and every session '
+             + 'on the account is signed out. You will get a one-time password to '
+             + 'hand over.')) return;
+  // Same one-time-password block the create flow uses: the endpoint has always
+  // returned a generated password, there was simply nowhere in the UI showing it,
+  // so the only way to reset someone was the command line.
+  api('PUT', '/users/' + encodeURIComponent(username) + '/password').then(out => {{
+    document.getElementById('issued-user').textContent = out.username;
+    document.getElementById('issued-pass').textContent = out.password;
+    document.getElementById('issued').style.display = 'block';
+    document.getElementById('issued').scrollIntoView({{behavior: 'smooth', block: 'center'}});
+    toast('Password reset', true);
   }}).catch(err => toast(err.message, false));
 }}
 function copyIssued(){{
