@@ -15,6 +15,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+import string
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -49,6 +50,23 @@ ROLES = ("admin", "manager", "tenant")
 _RANK = {"tenant": 0, "manager": 1, "admin": 2}
 
 
+def generate_password(length: int = 16) -> str:
+    """A first password nobody had to invent.
+
+    Used when one account creates another. The alternative -- an admin typing a
+    password and reading it out -- means the admin knows a credential the owner
+    may reuse elsewhere, and it cannot be un-known afterwards. Generated here,
+    shown once, and `must_change_password` forces the owner to replace it before
+    they can do anything.
+
+    Letters and digits only: this gets read aloud, written on a sticky note and
+    typed on a phone keyboard, and punctuation in that path causes more lockouts
+    than the extra entropy is worth. 16 characters of this alphabet is ~95 bits.
+    """
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
 @dataclass(frozen=True)
 class User:
     id: int
@@ -56,6 +74,7 @@ class User:
     display_name: str
     role: str
     zones: tuple[str, ...]
+    must_change_password: bool = False
 
     def at_least(self, role: str) -> bool:
         return _RANK[self.role] >= _RANK[role]
@@ -72,6 +91,7 @@ class User:
             "display_name": self.display_name,
             "role": self.role,
             "zones": list(self.zones),
+            "must_change_password": self.must_change_password,
         }
 
 
@@ -181,13 +201,15 @@ class AuthStore:
         display_name: str = "",
         zones: list[str] | None = None,
         actor: str = "system",
+        must_change: bool = True,
     ) -> int:
         if role not in ROLES:
             raise ValueError(f"role must be one of {ROLES}")
         cur = self._conn.execute(
-            "INSERT INTO app_user (username, display_name, password_hash, role, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (username, display_name or username, hash_password(password), role, time.time()),
+            "INSERT INTO app_user (username, display_name, password_hash, role, created_at,"
+            " must_change_password) VALUES (?, ?, ?, ?, ?, ?)",
+            (username, display_name or username, hash_password(password), role, time.time(),
+             int(must_change)),
         )
         user_id = int(cur.lastrowid)
         for zone in zones or []:
@@ -198,10 +220,21 @@ class AuthStore:
         self._store.log(actor, "user.create", username, {"role": role, "zones": zones or []})
         return user_id
 
-    def set_password(self, username: str, password: str, actor: str = "system") -> bool:
+    def set_password(self, username: str, password: str, actor: str = "system",
+                     must_change: bool | None = None) -> bool:
+        """Set a password.
+
+        `must_change` defaults to "whoever is doing this is not the owner", which
+        is the case for every administrative reset: the person typing it learns
+        the credential, so the owner has to replace it. Passing False is for
+        `change_own_password`, where the owner chose it and nobody else saw it.
+        """
+        if must_change is None:
+            must_change = actor.lower() != username.lower()
         cur = self._conn.execute(
-            "UPDATE app_user SET password_hash = ? WHERE username = ?",
-            (hash_password(password), username),
+            "UPDATE app_user SET password_hash = ?, must_change_password = ?"
+            " WHERE username = ?",
+            (hash_password(password), int(must_change), username),
         )
         self._conn.commit()
         if cur.rowcount:
@@ -210,6 +243,34 @@ class AuthStore:
             self.revoke_all_sessions(username)
             self._store.log(actor, "user.set_password", username)
         return bool(cur.rowcount)
+
+    def change_own_password(self, user: User, current: str, new: str) -> bool:
+        """The owner replacing their own password. Verifies the old one first.
+
+        Separate from `set_password` because the checks differ: an admin reset
+        does not know the old password and should not need it, while a user
+        changing their own must prove they are not someone who sat down at an
+        unlocked screen. Returns False if `current` is wrong.
+        """
+        row = self._conn.execute(
+            "SELECT password_hash FROM app_user WHERE id = ?", (user.id,)
+        ).fetchone()
+        if row is None or not verify_password(current, row["password_hash"]):
+            return False
+        if current == new:
+            raise ValueError("the new password must be different from the old one")
+
+        self._conn.execute(
+            "UPDATE app_user SET password_hash = ?, must_change_password = 0 WHERE id = ?",
+            (hash_password(new), user.id),
+        )
+        self._conn.commit()
+        # Every other session for this account is dropped: if the reason for the
+        # change is that the old password leaked, leaving those alive defeats it.
+        # The caller re-issues a session for the browser doing the changing.
+        self.revoke_all_sessions(user.username)
+        self._store.log(user.username, "user.password_changed")
+        return True
 
     def set_zones(self, username: str, zones: list[str], actor: str = "system") -> bool:
         row = self._conn.execute(
@@ -250,6 +311,7 @@ class AuthStore:
                 "username": r["username"], "display_name": r["display_name"],
                 "role": r["role"], "active": bool(r["active"]),
                 "zones": zones, "last_login": r["last_login"],
+                "must_change_password": bool(r["must_change_password"]),
             })
         return out
 
@@ -266,6 +328,9 @@ class AuthStore:
         return User(
             id=row["id"], username=row["username"], display_name=row["display_name"],
             role=row["role"], zones=zones,
+            # Absent on a row read before the column existed.
+            must_change_password=bool(row["must_change_password"])
+            if "must_change_password" in row.keys() else False,
         )
 
     # --- authentication ---------------------------------------------------------

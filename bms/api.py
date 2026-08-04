@@ -23,7 +23,10 @@ from fastapi.responses import (
 )
 from pydantic import BaseModel, Field
 
-from .auth import COOKIE_NAME, SESSION_TTL_SECONDS, AuthStore, LoginThrottle, User
+from .auth import (
+    COOKIE_NAME, SESSION_TTL_SECONDS, AuthStore, LoginThrottle, User,
+    generate_password,
+)
 from .bacnet import BacnetClient, DeviceUnreachable
 from .cache import Cache
 from .config import Config
@@ -77,7 +80,8 @@ class ExceptionRequest(BaseModel):
 
 class UserRequest(BaseModel):
     username: str
-    password: str = Field(min_length=8)
+    # No password field, deliberately. One is generated and returned once; see
+    # POST /users. A caller-supplied password means the caller knows it.
     role: str = Field(description="admin | manager | tenant")
     display_name: str = ""
     zones: list[str] = Field(default_factory=list,
@@ -86,6 +90,14 @@ class UserRequest(BaseModel):
 
 class PasswordRequest(BaseModel):
     password: str = Field(min_length=8)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    # The two-field confirmation is enforced in the browser, where a mismatch can
+    # be shown against the field that is wrong. The server sees one value and
+    # only cares that it is long enough.
+    new_password: str = Field(min_length=8)
 
 
 class ZonesRequest(BaseModel):
@@ -148,6 +160,24 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
     app = FastAPI(title="BMS Gateway", version="0.1.0", lifespan=lifespan)
     auth = AuthStore(store)
+
+    # Server-rendered pages resolve the session themselves rather than through the
+    # `current_user` dependency, so the API-side block on an unchanged password
+    # does not reach them -- a first-login account could still read the dashboard.
+    # Done here so it covers every page, including ones added later, rather than
+    # as a line in each route that someone will forget to copy.
+    PAGE_PREFIXES = ("/ui/", "/t/")
+
+    @app.middleware("http")
+    async def force_password_change(request: Request, call_next):
+        path = request.url.path
+        is_page = path == "/" or path.startswith(PAGE_PREFIXES)
+        if request.method == "GET" and is_page and path != "/ui/password":
+            token = request.cookies.get(COOKIE_NAME)
+            user = auth.resolve_session(token) if token else None
+            if user is not None and user.must_change_password:
+                return RedirectResponse("/ui/password", status_code=303)
+        return await call_next(request)
     throttle = LoginThrottle()
     # RP ID is the bare hostname of the public origin; the origin itself must
     # match exactly, scheme and all, or every assertion fails.
@@ -191,11 +221,24 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
     # --- authentication ---------------------------------------------------------
 
+    # Reachable while a password change is still owed. Anything else is refused:
+    # a forced change that can be navigated around is not a forced change, and
+    # the account is still holding a credential someone else chose and saw.
+    PASSWORD_CHANGE_EXEMPT = frozenset({
+        "/me", "/me/password", "/logout", "/login", "/ui/password", "/health", "/robots.txt",
+    })
+
     def current_user(request: Request) -> User:
         token = request.cookies.get(COOKIE_NAME)
         user = auth.resolve_session(token) if token else None
         if user is None:
             raise HTTPException(401, "sign in required")
+        if user.must_change_password and request.url.path not in PASSWORD_CHANGE_EXEMPT:
+            raise HTTPException(
+                403,
+                {"error": "password change required", "code": "password_change_required",
+                 "detail": "Set your own password before using the system."},
+            )
         return user
 
     def require(role: str):
@@ -289,6 +332,9 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
 
         # Only allow relative redirects, or this becomes an open redirect.
         target = next if next.startswith("/") and not next.startswith("//") else "/"
+        # A first login on a password someone else issued goes one place.
+        if user.must_change_password:
+            target = "/ui/password"
         response = RedirectResponse(target, status_code=303)
         response.set_cookie(
             COOKIE_NAME, token,
@@ -319,6 +365,39 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             "passkeys_available": passkeys.configured,
             "has_passkey": passkeys.has_passkey(user.id) if passkeys.configured else False,
         }
+
+    @app.post("/me/password")
+    async def change_own_password(
+        request: Request, body: ChangePasswordRequest,
+        user: User = Depends(current_user),
+    ) -> dict[str, Any]:
+        """Replace your own password, proving you know the current one.
+
+        Changing a password revokes every session for the account, which is the
+        point when the reason is a leak. That would include this browser, so a
+        fresh session is issued to the caller -- otherwise the act of securing
+        the account logs you out of the page you are standing on, and the most
+        common reason to be here is a first login that cannot go anywhere else.
+        """
+        try:
+            ok = await asyncio.to_thread(
+                auth.change_own_password, user, body.current_password, body.new_password
+            )
+        except ValueError as err:
+            raise HTTPException(400, str(err)) from err
+        if not ok:
+            store.log(user.username, "user.password_change.failed", client_ip(request),
+                      outcome="error")
+            raise HTTPException(403, "current password is incorrect")
+
+        token = auth.create_session(user, request.headers.get("user-agent"))
+        response = JSONResponse({"changed": True})
+        response.set_cookie(
+            COOKIE_NAME, token,
+            httponly=True, samesite="lax", secure=cfg.secure_cookies,
+            max_age=SESSION_TTL_SECONDS, path="/",
+        )
+        return response
 
     # --- passkeys ---------------------------------------------------------------
     #
@@ -1094,17 +1173,28 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     async def create_user(
         body: UserRequest, user: User = Depends(require("admin"))
     ) -> dict[str, Any]:
+        # The password is generated here, never supplied by the caller. An admin
+        # who types a password knows a credential belonging to someone else, and
+        # people reuse passwords -- that cannot be un-known later. This is shown
+        # once, in this response, and the account cannot do anything until its
+        # owner replaces it.
+        password = generate_password()
         try:
             granted = zones.validate_grant(body.zones) if body.role == "tenant" else []
             await asyncio.to_thread(
-                auth.create_user, body.username, body.password, body.role,
+                auth.create_user, body.username, password, body.role,
                 body.display_name, granted, user.username,
             )
         except ValueError as err:
             raise HTTPException(400, str(err)) from err
         except Exception as err:  # noqa: BLE001 - almost always a UNIQUE clash
             raise HTTPException(409, f"could not create user: {err}") from err
-        return {"username": body.username, "role": body.role}
+        return {
+            "username": body.username,
+            "role": body.role,
+            "password": password,
+            "must_change_password": True,
+        }
 
     @app.put("/users/{username}/password")
     async def set_password(

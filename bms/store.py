@@ -132,7 +132,11 @@ CREATE TABLE IF NOT EXISTS app_user (
     role          TEXT    NOT NULL CHECK (role IN ('admin','manager','tenant')),
     active        INTEGER NOT NULL DEFAULT 1,
     created_at    REAL    NOT NULL,
-    last_login    REAL
+    last_login    REAL,
+    -- Set when an account is created by someone else, cleared when the owner
+    -- chooses their own password. Whoever creates an account necessarily sees
+    -- the first password; this is what stops that being permanent.
+    must_change_password INTEGER NOT NULL DEFAULT 0
 );
 
 -- Which zone a device belongs to.
@@ -273,6 +277,18 @@ class Store:
                 " WHERE zone IS NOT NULL AND zone != '*'"
             )
             self.log("migration", "holiday.scope_columns_added")
+
+        user_columns = {r["name"] for r in self._conn.execute("PRAGMA table_info(app_user)")}
+        if "must_change_password" not in user_columns:
+            self._conn.execute(
+                "ALTER TABLE app_user ADD COLUMN must_change_password"
+                " INTEGER NOT NULL DEFAULT 0"
+            )
+            # Existing accounts are left alone deliberately. Forcing a reset on
+            # everyone at once would lock the building's managers out of a system
+            # they are mid-way through commissioning, to fix a risk that only
+            # applies to passwords someone else chose.
+            self.log("migration", "app_user.must_change_password_added")
 
     def close(self) -> None:
         self._conn.close()

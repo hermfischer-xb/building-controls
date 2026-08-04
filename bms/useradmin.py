@@ -138,6 +138,10 @@ def main() -> None:
         p.add_argument("--name", default="", help="display name")
         p.add_argument("--zones", nargs="*", default=[],
                        help="zones this tenant may act on (tenants only)")
+        p.add_argument("--no-change-required", action="store_true",
+                       help="skip the forced password change at first sign-in. Only "
+                            "correct when creating your OWN account, e.g. the first "
+                            "admin -- otherwise you know someone else's password")
         p.set_defaults(role=role)
 
     p = sub.add_parser("passwd", help="set a password and revoke existing sessions")
@@ -179,11 +183,12 @@ def main() -> None:
                 print("No users yet. Create one with: "
                       ".venv/bin/python -m bms.useradmin add-admin <username>")
                 return
-            print(f"{'USERNAME':20} {'ROLE':9} {'ACTIVE':7} ZONES")
+            print(f"{'USERNAME':20} {'ROLE':9} {'ACTIVE':7} {'PASSWORD':10} ZONES")
             for u in users:
                 zones = ", ".join(u["zones"]) or "—"
+                pw = "must set" if u.get("must_change_password") else "own"
                 print(f"{u['username']:20} {u['role']:9} "
-                      f"{'yes' if u['active'] else 'no':7} {zones}")
+                      f"{'yes' if u['active'] else 'no':7} {pw:10} {zones}")
             return
 
         if args.command in ("add-admin", "add-manager", "add-tenant"):
@@ -191,13 +196,17 @@ def main() -> None:
                 print("Note: zones are ignored for managers and admins, who see every zone.",
                       file=sys.stderr)
             password, generated = prompt_password(args.username)
+            must_change = not args.no_change_required
             auth.create_user(
-                args.username, password, args.role, args.name, args.zones, actor="cli"
+                args.username, password, args.role, args.name, args.zones, actor="cli",
+                must_change=must_change,
             )
             print(f"Created {args.role} {args.username!r}.")
             if generated:
                 print(f"\n  Password: {password}\n")
                 print("This is shown once. Store it in a password manager now.")
+            if must_change:
+                print("They will be asked to choose their own password at first sign-in.")
             return
 
         if args.command == "passwd":
@@ -246,6 +255,9 @@ def main() -> None:
             issued = []
             for r in new:
                 password = r["password"] or generate_password()
+                # must_change is left at its default of True: this command exists
+                # to hand credentials to other people, so every one of them is a
+                # password its owner did not choose.
                 auth.create_user(r["username"], password, r["role"],
                                  r["display_name"], r["zones"], actor="cli")
                 if not r["password"]:

@@ -105,6 +105,13 @@ def build_router(
             )
         )
 
+    @router.get("/ui/password", response_class=HTMLResponse)
+    async def password_page(request: Request):
+        user = visitor(request)
+        if user is None:
+            return signin(request)
+        return HTMLResponse(pages.password_page(user))
+
     @router.get("/ui/security", response_class=HTMLResponse)
     async def security(request: Request):
         user = visitor(request)

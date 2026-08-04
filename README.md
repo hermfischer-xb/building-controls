@@ -169,12 +169,16 @@ port (47808) → DHCP or static. Requires the installer passcode.
 
 ```bash
 # Create the first account (blank password prompt generates a strong one)
-.venv/bin/python -m bms.useradmin add-admin herm
+.venv/bin/python -m bms.useradmin add-admin herm --no-change-required
 
 .venv/bin/python -m bms --config config/devices.yaml
 ```
 
 Then open <http://127.0.0.1:8237/>.
+
+`--no-change-required` is right here and almost nowhere else: you are creating
+your *own* account, so nobody else learns the password. Every other account is
+created by someone who is not its owner — see below.
 
 ## Commissioning a building, not a thermostat
 
@@ -290,6 +294,37 @@ not 403 — they should not learn which other devices exist.
 
 Passwords use scrypt. Sessions are server-side and revocable; changing a password
 invalidates them. Login is throttled per username *and* client address.
+
+### Nobody else gets to know your password
+
+Accounts are created by someone other than their owner, which means the creator
+necessarily sees the first password. There is deliberately **no field to type one
+into**: the server generates it, returns it once, and the account can do nothing
+until its owner replaces it.
+
+1. An admin creates the account. A 16-character one-time password appears once on
+   the Users page, to be handed over however is convenient.
+2. That password signs in and goes straight to *Choose your password*. Every
+   other page redirects there, and every API call returns 403 with
+   `password_change_required` — a forced change that can be navigated around is
+   not a forced change.
+3. Setting a new one clears the flag and revokes every session for the account,
+   including any the admin might have opened. The browser doing the changing gets
+   a fresh session so it is not signed out mid-task.
+
+The change form asks for the current password and the new one **twice**. The
+match is checked in the browser, because the server is sent a single value and
+cannot compare two — a confirmation field is only meaningful where both are
+visible.
+
+Administrative resets (`useradmin passwd`, `PUT /users/{u}/password`) set the same
+flag, on the same reasoning: whoever performed the reset knows the password.
+`useradmin add-* --no-change-required` opts out and is correct only when creating
+your own account.
+
+`tools/test_passwords.py` covers the lifecycle end to end — that the password is
+generated rather than accepted from the caller, that it unlocks nothing but the
+change form, and that it stops working once replaced.
 
 ## The tenant page — `/t/{device_id}`
 
@@ -469,6 +504,7 @@ tools/
   test_roles.py   authorisation matrix
   test_proxy.py   login throttle keys on the real client, not the proxy
   test_passkeys.py  passkey security properties, against a software authenticator
+  test_passwords.py one-time passwords: generated, forced change, single use
   devices_from_csv.py  a spreadsheet of thermostats -> the devices: block
   truportal_soap.py    raw SOAP calls, for exploring the panel
 deploy/

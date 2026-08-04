@@ -716,6 +716,61 @@ function addException(){{
 # --- system ------------------------------------------------------------------
 
 
+def password_page(user) -> str:
+    """Change your own password.
+
+    Two fields for the new one, compared here rather than on the server. The
+    server only ever receives one value, so a mismatch has to be caught where
+    both are visible and the message can point at the field that is wrong.
+    """
+    forced = user.must_change_password
+    lede = (
+        "This account was created for you, so someone else chose its first "
+        "password and has seen it. Choose your own to continue."
+        if forced else
+        "Changing your password signs out every other device on this account."
+    )
+    return page("Password", user, f"""
+<h1>{'Choose your password' if forced else 'Change your password'}</h1>
+<p class="lede">{e(lede)}</p>
+
+<div class="card" style="max-width:26rem">
+ <div><label for="cur">Current password</label>
+  <input id="cur" type="password" autocomplete="current-password" style="width:100%"></div>
+ <div style="margin-top:.8rem"><label for="new1">New password</label>
+  <input id="new1" type="password" autocomplete="new-password" style="width:100%"></div>
+ <div style="margin-top:.8rem"><label for="new2">New password again</label>
+  <input id="new2" type="password" autocomplete="new-password" style="width:100%"></div>
+ <p class="sub" id="hint" style="margin:.6rem 0 0">At least 8 characters.</p>
+ <button class="primary" style="margin-top:.9rem" onclick="savePassword()">Save</button>
+</div>
+
+<script>
+function savePassword(){{
+  const cur = document.getElementById('cur').value;
+  const a = document.getElementById('new1').value;
+  const b = document.getElementById('new2').value;
+  const hint = document.getElementById('hint');
+  // Checked here because the server is sent one value and cannot compare them.
+  if (a !== b) {{
+    hint.textContent = 'The two new passwords do not match.';
+    hint.style.color = 'var(--bad)'; return;
+  }}
+  if (a.length < 8) {{
+    hint.textContent = 'At least 8 characters.';
+    hint.style.color = 'var(--bad)'; return;
+  }}
+  if (a === cur) {{
+    hint.textContent = 'The new password must be different from the current one.';
+    hint.style.color = 'var(--bad)'; return;
+  }}
+  api('POST', '/me/password', {{current_password: cur, new_password: a}})
+    .then(() => {{ toast('Password changed', true); setTimeout(() => location.href = '/', 700); }})
+    .catch(err => {{ hint.textContent = err.message; hint.style.color = 'var(--bad)'; }});
+}}
+</script>""", active="/ui/password")
+
+
 def _link_quality(links: list[dict]) -> str:
     """Rank devices by poll round-trip, worst first.
 
@@ -865,7 +920,8 @@ def users(user, accounts: list[dict], zones: list[str]) -> str:
  <td>{chip(a['role'], 'ok' if a['active'] else 'bad')}</td>
  <td>{zone_editor(a)}</td>
  <td class="sub">{e(dt.datetime.fromtimestamp(a['last_login']).strftime('%d %b %H:%M')
-                    if a.get('last_login') else 'never')}</td>
+                    if a.get('last_login') else 'never')}
+     {chip('one-time password', 'warn') if a.get('must_change_password') else ''}</td>
  <td>{'' if a['username'] == user.username or not a['active'] else
       f'''<button class="danger" onclick="act('DELETE','/users/{e(a['username'])}',null,'Deactivated')">Deactivate</button>'''}</td>
 </tr>"""
@@ -893,11 +949,18 @@ own suite. Managers run the building; admins also manage accounts.</p>
    <option value="manager">Manager</option><option value="admin">Admin</option></select></div>
   <div><label for="uzone">Zone (tenants)</label>
    <select id="uzone"><option value="">—</option>{zone_opts}</select></div>
-  <div><label for="upass">Password</label><input id="upass" type="password"></div>
   <button class="primary" onclick="addUser()">Create</button>
  </div>
- <p class="sub">Minimum 8 characters. Passwords are hashed with scrypt; changing one
-    revokes that account's sessions.</p>
+ <p class="sub">A one-time password is generated and shown here once. Hand it over,
+    and the account must replace it at first sign-in — so nobody but its owner ends
+    up knowing it. There is deliberately nowhere to type one in.</p>
+ <div id="issued" style="display:none;margin-top:1rem;padding:1rem;border-radius:12px;
+      background:color-mix(in srgb,var(--ok) 12%,transparent)">
+  <div class="sub">One-time password for <strong id="issued-user"></strong> — shown once</div>
+  <div class="big" id="issued-pass"
+       style="font-size:1.35rem;letter-spacing:.04em;user-select:all;word-break:break-all"></div>
+  <button style="margin-top:.6rem" onclick="copyIssued()">Copy</button>
+ </div>
 </div>
 
 <script>
@@ -913,13 +976,24 @@ function addUser(){{
     username: document.getElementById('uname').value.trim(),
     display_name: document.getElementById('udisp').value.trim(),
     role: document.getElementById('urole').value,
-    password: document.getElementById('upass').value,
     zones: zone ? [zone] : []
   }};
-  if (!body.username || body.password.length < 8) {{
-    toast('Username required, password at least 8 characters', false); return;
-  }}
-  act('POST', '/users', body, 'Account created');
+  if (!body.username) {{ toast('Username required', false); return; }}
+  // Not act(): that reloads on success, which would wipe the one-time password
+  // off the screen before anyone could read it.
+  api('POST', '/users', body).then(out => {{
+    document.getElementById('issued-user').textContent = out.username;
+    document.getElementById('issued-pass').textContent = out.password;
+    document.getElementById('issued').style.display = 'block';
+    ['uname','udisp'].forEach(id => document.getElementById(id).value = '');
+    toast('Account created', true);
+  }}).catch(err => toast(err.message, false));
+}}
+function copyIssued(){{
+  const text = document.getElementById('issued-pass').textContent;
+  navigator.clipboard.writeText(text)
+    .then(() => toast('Copied', true))
+    .catch(() => toast('Select the password and copy it manually', false));
 }}
 </script>
 """
