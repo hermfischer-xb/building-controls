@@ -328,6 +328,34 @@ cause. Two substitutions are needed, not one: the repo path contains the literal
 The mini's repo is at `/Users/Shared/building-controls` — outside TCC, per the
 `~/Documents` trap documented in DEPLOY.md. Do not assume a home-directory path.
 
+## Settled: weak-signal drop-outs are a Wi-Fi coverage job
+
+Some units drop out on weak signal. Two things were considered and one is closed.
+
+**Wi-Fi RSSI is not readable over BACnet.** All 770 objects on firmware
+`01.01.16.00` were checked — no RSSI, nothing in the decibel unit family, and
+every object whose name contains "Net" is fallback behaviour for stale network
+*inputs*. The vendor's point list does contain `Gui_WiFiStatus`, along with 30
+other `Gui_*` points, and the device exposes **zero** of them. Added to the
+corrections table in the README.
+
+So the gateway measures round-trip instead: per-device poll timing, a smoothed
+average and lifetime failure counts, ranked worst-first under **Link quality** on
+the System page. Bands come from this building's numbers — ~640 ms is the norm,
+marginal at ~1200, weak at ~2000 or 5% failures.
+
+**MS/TP over the old LonWorks wiring is ruled out.** The cabling is home-run
+stars with no terminators, confirmed by the person who supervised installing it.
+RS-485 needs a linear daisy chain; that is the one topology it cannot be talked
+into. Do not revisit this — the reasoning and the three other blockers are in the
+README, including that `bacpypes3` 0.0.106 has no MS/TP link layer at all.
+
+**The answer is more access points**, of which Herm has spares. Worth knowing for
+whoever helps: the TC500A is a 2.4 GHz client, so plan channels 1/6/11 and turn
+transmit power *down* — high power everywhere makes clients cling to a distant AP
+instead of roaming to the near one, which produces exactly this symptom. The Link
+quality table gives a before/after measurement per suite.
+
 ## Still open, in priority order
 
 0. ~~Restart the gateway~~ — **done 2026-08-03 18:14.** The second half is not:

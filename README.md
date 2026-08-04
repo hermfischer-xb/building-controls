@@ -558,7 +558,22 @@ onto the control network.
 `tools/discover.py` will dump any BACnet device's object map, so it is a
 reasonable starting point for adapting this to other equipment.
 
-### If Wi-Fi cannot be made good enough: MS/TP over the old LonWorks wiring
+### MS/TP over the old LonWorks wiring — ruled out at this building
+
+**Not viable at 16400 Ventura.** The existing LonWorks cabling is home-run stars
+with no terminators anywhere, confirmed by the person who supervised its
+installation. RS-485 needs a single linear daisy chain; a star of spurs is the
+one topology it cannot be talked into. Reusing that wire would mean pulling new
+wire, at which point the wire is not being reused.
+
+Multi-port RS-485 repeater hubs do exist, which turn each spur into its own
+terminated segment. For sixteen home runs that is several industrial hubs, their
+power supplies and the labour to land and terminate every leg — against a box of
+spare access points that cost nothing and go in this afternoon. It is the wrong
+trade here.
+
+The rest of this section is kept for a future building, or in case someone
+proposes this again.
 
 Buildings converted from LonWorks often still have twisted pair running to every
 thermostat, and the TC500A does speak BACnet MS/TP (Config → Connection → BACnet
@@ -584,7 +599,9 @@ determined by measurement rather than optimism:
   1. **Topology.** FT-10 is free topology — stars, T-taps and spurs are all legal.
      RS-485 requires a single linear daisy chain, 120 Ω at the two physical ends,
      and stubs of inches. Home runs to a panel will not work reliably no matter
-     how carefully they are landed. **Trace the existing runs before committing.**
+     how carefully they are landed. **Trace the existing runs first** — this is
+     the question that decides it, and at this building the answer was stars, so
+     the other three points never got a chance to matter.
   2. **No signal common.** FT-10 is transformer-coupled two-wire, so no reference
      conductor was pulled. RS-485 needs receivers to stay inside a -7 V to +12 V
      common-mode window, usually satisfied through shared building ground, but
@@ -592,9 +609,9 @@ determined by measurement rather than optimism:
   3. **Unshielded pair beside contactors.** Workable, helped considerably by
      running the segment slower.
 
-The honest summary: the wire may well be reusable, the polarity is trivial, the
-topology is the question that decides it, and the gateway needs a router
-appliance either way.
+The honest summary: polarity is trivial, topology decides it, and the gateway
+needs a router appliance either way. Here topology decided it — the answer is
+more access points.
 
 ## Roadmap
 
