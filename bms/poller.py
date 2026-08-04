@@ -127,9 +127,16 @@ class Poller:
 
     async def poll_once(self) -> None:
         for device in self._cfg.devices:
+            started = time.perf_counter()
             try:
                 values = await self._client.read_points(device)
-                self._cache.record_success(device.device_id, values)
+                # Timed per device, because the fleet average hides the problem:
+                # a unit on a weak signal is slow while its neighbours are fine,
+                # and this is the only link-quality signal available -- the
+                # thermostats do not expose Wi-Fi RSSI over BACnet.
+                self._cache.record_success(
+                    device.device_id, values, (time.perf_counter() - started) * 1000
+                )
             except DeviceUnreachable as err:
                 state = self._cache.get(device.device_id)
                 # Log the transition, not every cycle, or an offline thermostat

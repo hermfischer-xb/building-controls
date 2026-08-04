@@ -716,7 +716,60 @@ function addException(){{
 # --- system ------------------------------------------------------------------
 
 
-def system(user, health: dict, reconcile: dict, audit: list[dict]) -> str:
+def _link_quality(links: list[dict]) -> str:
+    """Rank devices by poll round-trip, worst first.
+
+    Stands in for Wi-Fi signal strength, which the TC500A shows on its own
+    touchscreen but does not publish over BACnet — all 770 objects on firmware
+    01.01.16.00 were checked and there is no RSSI point. Round-trip time is
+    arguably the better number anyway: it measures the whole path, so a link that
+    is retransmitting heavily shows up here while its RSSI still looks healthy.
+    """
+    if not links:
+        return ""
+
+    ranked = sorted(
+        links, key=lambda d: (d.get("avg_poll_ms") is None, -(d.get("avg_poll_ms") or 0))
+    )
+    rows = []
+    for d in ranked:
+        avg, last = d.get("avg_poll_ms"), d.get("last_poll_ms")
+        rate = d.get("failure_rate")
+        # Thresholds from this building's own measurements: ~640 ms is the fleet
+        # norm over Wi-Fi, so flag at roughly double and again at triple.
+        if avg is None:
+            band = chip("no data")
+        elif avg >= 2000 or (rate or 0) >= 0.05:
+            band = chip("weak", "bad")
+        elif avg >= 1200:
+            band = chip("marginal", "warn")
+        else:
+            band = chip("ok", "ok")
+        fails = d.get("total_failures") or 0
+        rows.append(
+            f"""<tr><td>{e(d['name'])}<div class="sub">{e(d['address'])}</div></td>
+ <td>{band}</td>
+ <td class="num">{'—' if avg is None else f'{avg:,.0f}'}</td>
+ <td class="num sub">{'—' if last is None else f'{last:,.0f}'}</td>
+ <td class="num sub">{fails} / {(d.get('total_polls') or 0) + fails}</td></tr>"""
+        )
+
+    return f"""
+<h2>Link quality</h2>
+<p class="sub">Poll round-trip per device, worst first. The thermostats do not
+report Wi-Fi signal strength over BACnet — it is on their own touchscreen under
+System Status → Network Status, and on the access point's client list. This
+measures the whole path instead, so a unit that is retransmitting shows here even
+when its signal reads fine. Counters reset when the gateway restarts.</p>
+<div class="card"><div class="wrap"><table>
+ <tr><th>Device</th><th>Link</th><th class="num">Avg ms</th>
+     <th class="num">Last ms</th><th class="num">Failed / attempts</th></tr>
+ {''.join(rows)}
+</table></div></div>"""
+
+
+def system(user, health: dict, reconcile: dict, audit: list[dict],
+           links: list[dict] | None = None) -> str:
     drift = reconcile.get("clock_drift_seconds") or {}
     drift_rows = "".join(
         f"<tr><td>{e(k)}</td><td class='num'>{float(v):+.1f}s</td>"
@@ -765,6 +818,7 @@ devices responding · polling every {e(health.get('poll_interval_seconds'))}s
     host is their clock. Drift is corrected automatically past the configured limit.</p>
  <table>{drift_rows or '<tr><td class="empty">No readings yet.</td></tr>'}</table>
 </div>
+{_link_quality(links or [])}
 
 <h2>Recent activity</h2>
 <div class="card"><div class="wrap"><table>

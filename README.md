@@ -78,6 +78,7 @@ wrong in revision **31-00478-06**, the current published version as of August
 | Table 45: the schedule object is named `EnumSchedule` | It is named `OccSchedule`. The same document's proprietary-properties list also says `OccSchedule`, so it contradicts itself |
 | `ni_BypassValue` is described as the "Bypass Value to enable Bypass Time" | It does **not** set the duration. `Cfg_Thermostat_BypOverrideTime` does. Write only `ni_BypassValue` and every bypass runs for whatever the config point holds, silently ignoring the request |
 | `ni_OccManCom` is listed as the network occupancy override, with no preconditions | Inert until `Cfg_Thermostat_Override` is enabled. Without it the write succeeds, the point reads back the new value, and effective occupancy never moves |
+| Ch. "List of all BACnet objects" includes 31 `Gui_*` points, among them `Gui_WiFiStatus`, `Gui_LEDStatus` and `Gui_ApplicationRevision` | **None of them exist.** The device advertises 770 objects and not one is `Gui_*`. There is no Wi-Fi signal strength, LED state or GUI diagnostic available over BACnet, whatever the point list says |
 
 Two of those are the nastiest kind of bug: the write is accepted, the value
 reads back correctly, and nothing happens. `no_BypassRemTime` is similar — it

@@ -186,7 +186,8 @@ def build_router(
             "poll_interval_seconds": cfg.poll_interval_seconds,
         }
         return HTMLResponse(
-            pages.system(user, health, reconciler.status, store.recent_audit(40))
+            pages.system(user, health, reconciler.status, store.recent_audit(40),
+                         links=[d.to_dict(cfg.poll_interval_seconds * 3) for d in devices])
         )
 
     @router.get("/ui/users", response_class=HTMLResponse)
