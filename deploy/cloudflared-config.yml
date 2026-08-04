@@ -33,15 +33,31 @@ ingress:
   - hostname: controls.16400ventura.com
     service: http://127.0.0.1:8237
 
-  # --- TruPortal, so it can come off its public IP --------------------------
-  # An access control appliance with no vendor since 2020 should not be exposed
-  # directly. Point this at its LAN address and then remove the public mapping.
+  # --- TruPortal admin UI, OPTIONAL and Access-gated -------------------------
+  #
+  # Commented out by default, deliberately. Two things to understand first:
+  #
+  # 1. The gateway does NOT use this. It reaches the panel directly on the LAN
+  #    via `truportal.host` in devices.yaml. This entry exists only so a human
+  #    can reach the panel's own admin UI for badge administration.
+  #
+  # 2. Publishing this hostname without a Cloudflare Access policy on it is
+  #    WORSE than the public IP it replaces. It does not hide the appliance --
+  #    it renames it, and Certificate Transparency publishes the new name within
+  #    hours. An unpatched 2020 appliance still answers strangers; it just has a
+  #    prettier address, and it looks solved.
+  #
+  # So: put Access on truportal.16400ventura.com FIRST, confirm an unauthenticated
+  # request is refused at the edge, and only then uncomment this.
+  #
   # noTLSVerify because it carries a self-signed certificate and, with Interlogix
-  # gone, there is no path to a trusted one.
-  - hostname: truportal.16400ventura.com
-    service: https://CHANGEME-TRUPORTAL-LAN-IP
-    originRequest:
-      noTLSVerify: true
+  # gone, there is no path to a trusted one. That is acceptable only over the LAN
+  # hop between cloudflared and the panel, which does not cross the internet.
+  #
+  # - hostname: truportal.16400ventura.com
+  #   service: https://192.168.144.65
+  #   originRequest:
+  #     noTLSVerify: true
 
   # Required catch-all: anything else gets refused rather than proxied.
   - service: http_status:404

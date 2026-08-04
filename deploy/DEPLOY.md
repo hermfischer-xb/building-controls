@@ -557,10 +557,82 @@ the path Cloudflare sees rather than something rewritten by the tunnel.
 
 ## 7. Retire the TruPortal public IP
 
-With `truportal.16400ventura.com` routing through the tunnel, remove the public
-IP mapping at the firewall. That takes an access control appliance which has had
-no vendor and no patches since 2020 off the open internet, while keeping the
-remote access it is relied on for.
+The appliance has had no vendor and no patches since 2020, and it opens doors.
+Anyone on the internet can currently reach its login page, and Shodan indexes
+hosts like it continuously. This is the largest single risk in the building, and
+it is larger than anything in this application.
+
+### Do these in order — the order is the point
+
+**1. Give it a LAN address** (e.g. `192.168.144.65`) and point the gateway at it:
+
+```yaml
+truportal:
+  host: 192.168.144.65
+```
+
+The gateway reaches it directly over the LAN. **It does not need the tunnel for
+this** — the tunnel exists only for humans using the TruPortal admin UI.
+
+**2. Remove the public IP mapping at the firewall.** This is the step that
+actually removes the risk. Everything else is convenience.
+
+**3. Only then decide whether to expose the admin UI at all.**
+
+### A tunnel is not a security control
+
+Publishing `truportal.16400ventura.com` through the tunnel with no policy in
+front does **not** protect the appliance. It moves the front door from an IP
+address to a hostname, and Certificate Transparency publishes every hostname
+that gets a certificate within hours — so it trades discovery-by-IP-scan for
+discovery-by-CT-log, which is if anything faster. The unpatched 2020 HTTP stack
+is still answering strangers; they just spell its address differently.
+
+What makes it safe is **Cloudflare Access in front of that hostname**.
+Unauthenticated requests are then terminated at Cloudflare's edge and never
+reach the appliance at all — its own login page stops being internet-reachable
+even though the hostname resolves. Two seats, you and the building manager.
+
+So: **do not create the `truportal` tunnel hostname without an Access policy on
+it.** Publishing it unprotected is worse than the public IP it replaces, because
+it looks solved.
+
+### Consider not exposing it at all
+
+Ask what still needs the TruPortal UI once this application is running. Door
+unlock and lighting are already here, passkey-gated and role-scoped. What is
+left is badge and cardholder administration — infrequent, and doable on site or
+through the tunnel only when you enable it.
+
+The strongest posture is a LAN address, no public mapping, no tunnel hostname,
+and on-site access when badges change. The next strongest is a tunnel hostname
+behind Access. Both are enormously better than today.
+
+### What this does and does not fix
+
+Fixed: the entire internet can no longer reach an unpatched access control
+appliance. That is the whole threat model for a device with a public IP.
+
+Not fixed, and worth knowing:
+
+- **Anyone already on the building LAN can still reach it.** A VLAN limits that
+  to the mini. Until then, a compromised laptop on the office network is inside.
+- **`truportal.password` is still cleartext** in `config/devices.yaml` (mode 600).
+  A LAN address reduces who can use it; it does not stop someone who reads it.
+- **The mini becomes the only remote path to the panel.** Acceptable — on-site
+  access is unaffected by a mini failure — but know it before you rely on it.
+- **Check IP forwarding is off** on the mini. It is dual-homed, and a host that
+  forwards packets between the office LAN and the control network undoes the
+  isolation the VLAN is for:
+
+```bash
+sysctl net.inet.ip.forwarding          # want 0
+sudo sysctl -w net.inet.ip.forwarding=0
+```
+
+  Nothing here routes: the gateway is an application-layer bridge that terminates
+  HTTP on one side and speaks BACnet and SOAP on the other, so it never needs to
+  forward a packet.
 
 ---
 
