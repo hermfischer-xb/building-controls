@@ -169,14 +169,34 @@ POINTS: tuple[Point, ...] = (
         "network_override_enable", "binary-value,135", True, None, None,
         "Cfg_Thermostat_Override -- gates whether ni_OccManCom is honoured",
     ),
-    #   The clamp on the thermostat's own slider. Ships at 30 deltaF, which is no
-    #   limit in practice -- it lets an occupant standing at the wall ask for 38
-    #   or 106. Narrowing this is the only way to bound what someone can do
-    #   locally, because the adjustment is made on the device and there is no
-    #   network point to intercept it.
+    # --- the occupant's temporary adjustment ------------------------------------
+    #
+    # The slider on the thermostat's home screen writes an OFFSET, not a setpoint.
+    # All four points below are delta-degrees F (BACnet unit 120), and all four
+    # are plain Analog Values with no priority array -- so a write is an ordinary
+    # write and reverting means putting the old number back, unlike no_EffSp.
+    #
+    # 0.0 means "following the schedule". A non-zero value is what no_SetpointSts
+    # reports as Temporary.
+    Point(
+        "heat_adjust", "analog-value,257", True, "deltaF", None,
+        "Cfg_Thermostat_HtAdjStPt -- occupant offset to the heating setpoint",
+    ),
+    Point(
+        "cool_adjust", "analog-value,256", True, "deltaF", None,
+        "Cfg_Thermostat_ClAdjStPt -- occupant offset to the cooling setpoint",
+    ),
+    Point(
+        "adjust", "analog-value,3", True, "deltaF", None,
+        "Cfg_Thermostat_AdjStPt -- the single-setpoint form of the two above",
+    ),
+    #   The clamp on all of them. Ships at 30 deltaF, which is no limit in
+    #   practice -- it lets an occupant standing at the wall ask for 38 or 106.
+    #   Narrowing it bounds the slider, which is the only way to bound the slider:
+    #   that adjustment is made on the device and never crosses the network.
     Point(
         "occupant_adjust_limit", "analog-value,102", True, "deltaF", None,
-        "Cfg_Thermostat_TempOffSpLimit -- how far the slider may move the setpoint",
+        "Cfg_Thermostat_TempOffSpLimit -- how far the adjustments above may go",
     ),
     # Read-back of what the device is actually doing with the bypass, as opposed
     # to what we last asked for. The remaining-time countdown is what a tenant

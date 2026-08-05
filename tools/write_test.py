@@ -169,6 +169,30 @@ async def main() -> None:
             await try_write(app, addr, "analog-value,4", "presentValue", 76.0)
             record("write AV4 @ priority 8", "ACCEPTED", f"read back {back!r} (priority likely ignored)")
 
+        print("\n=== 4a. the occupant adjustment offsets ===")
+        # These are what the slider on the home screen writes: plain Analog
+        # Values in delta-degrees F, no priority array, 0.0 meaning "following
+        # the schedule". If they take, a tenant can be given a bounded temporary
+        # nudge over the network without commanding anything -- which is the
+        # whole reason to prefer them to no_EffSp below.
+        for objid, name in (
+            ("analog-value,257", "Cfg_Thermostat_HtAdjStPt (heat offset)"),
+            ("analog-value,256", "Cfg_Thermostat_ClAdjStPt (cool offset)"),
+            ("analog-value,3", "Cfg_Thermostat_AdjStPt (single offset)"),
+        ):
+            await roundtrip(
+                app, addr, objid, "presentValue", 2.0, name,
+                compare=lambda a, b: abs(float(a) - float(b)) < 0.01,
+            )
+        # And whether the device enforces its own clamp, which decides how much
+        # validation belongs in the gateway. 99 is far outside the 30 it ships
+        # with, so a device that clamps should refuse it or store something else.
+        await roundtrip(
+            app, addr, "analog-value,257", "presentValue", 99.0,
+            "HtAdjStPt = 99 (past the 30 deltaF limit -- does the device clamp?)",
+            compare=lambda a, b: abs(float(a) - float(b)) < 0.01,
+        )
+
         print("\n=== 4b. no_EffSp: is the effective setpoint commandable? ===")
         # analog-output,5 has a real priority array, with the device publishing
         # its own value at priority 15. If a write at 8 takes, the gateway could

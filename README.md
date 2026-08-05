@@ -151,12 +151,26 @@ all confirmed present on firmware `01.01.16.00`:
 
 Two things follow that are worth knowing before designing around this.
 
-**There is no network point for a temporary adjustment.** Every `ni_*` object was
-enumerated: none of them is a setpoint. `ni_BypassValue` is not one either — its
-units are `no-units` (95), not degrees, so it is neither a temperature nor, as
-already documented above, a duration. The slider is a local affordance, and the
-gateway can observe it but not drive it. What the gateway *can* offer a tenant is
-bypass, which brings the space to occupied setpoints for a bounded period.
+**The adjustment is an offset, and it is writable.** The slider does not set a
+setpoint; it writes a delta:
+
+| Point | Object | |
+|---|---|---|
+| `Cfg_Thermostat_HtAdjStPt` | `analog-value,257` | offset to the heating setpoint |
+| `Cfg_Thermostat_ClAdjStPt` | `analog-value,256` | offset to the cooling setpoint |
+| `Cfg_Thermostat_AdjStPt` | `analog-value,3` | the single-setpoint form of the two |
+
+All are delta-degrees F, all read `0.0` when the unit is following its schedule,
+and all are **plain Analog Values with no priority array** — so writing one is an
+ordinary write and reverting means putting the old number back. That makes them a
+far safer basis for a tenant-facing temporary adjustment than `no_EffSp`, which
+is an `analog-output`: commanding that one occupies a priority slot until
+something writes Null to relinquish it, and a gateway that forgets leaves the
+setpoint pinned and no longer tracking the thermostat.
+
+Note also that no `ni_*` object is a setpoint — `ni_BypassValue` in particular has
+units `no-units` (95), so it is neither a temperature nor, as documented above, a
+duration. The occupant path is these `Cfg_` offsets, not a network input.
 
 **The clamp ships effectively disabled.** `Cfg_Thermostat_TempOffSpLimit` is
 `30` delta-degrees F out of the box, which lets somebody at the wall ask for 38
