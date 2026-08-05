@@ -14,6 +14,16 @@ start a bypass and command its occupancy for the seconds each test takes, and a
 revert that fails leaves it that way. Pick a vacant suite, or run it out of
 hours, and read the summary at the end rather than assuming it cleaned up.
 
+**Stop the gateway first**, or expect to misread the results. The reconciler
+pushes stored intent every few minutes and will happily overwrite a setpoint this
+tool has just written -- which reads as "the write did not take" when in fact it
+took and was corrected. It does not touch the adjustment offsets, but it does
+touch setpoints and schedules:
+
+    sudo launchctl bootout system/com.building-controls.gateway
+    ... run this ...
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.building-controls.gateway.plist
+
 Two kinds of point, and they are reverted differently -- see
 `commandable_roundtrip` for why writing the old value back to a commandable
 object is not a revert at all.
