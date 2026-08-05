@@ -446,12 +446,22 @@ which survive.
    — each verified physically at the building and against the audit table, not
    inferred from a 200.
 
-1. **Cloudflare dashboard.** Access on `/ui/*`, a rate-limit rule on `/login`,
-   SSL Full (strict). Certificate Transparency publishes every hostname that gets
-   a certificate, so scanners find these within hours — and door unlock is now
-   live behind this one. The only rate limiting today is `LoginThrottle`, which
-   is in-process and dies with every restart. **This is the highest-value
-   remaining item and it is not code.**
+1. **Cloudflare dashboard.** The **rate-limit rule on `/login` is set** — Herm
+   did it 2026-08-04. Worth confirming once from a phone on cellular, since a
+   rule that matches nothing looks identical to a rule that works: reload the
+   login page and submit a wrong password a dozen times inside ten seconds, and
+   expect Cloudflare's block page rather than the app's "Incorrect username or
+   password". If the app's message keeps coming back, check the rule is scoped to
+   the hostname and that `/login` is the path Cloudflare sees.
+
+   Still open here: **Access on `/ui/*`** and **SSL Full (strict)**. Certificate
+   Transparency publishes every hostname that gets a certificate, so scanners
+   find these within hours, and door unlock is live behind this one.
+
+   Note the in-process `LoginThrottle` remains the only per-account limit, it
+   still resets on every restart, and it deliberately does not catch one password
+   sprayed across many usernames — that case is exactly what the new edge rule
+   covers, which is why the two are complementary rather than redundant.
 2. **Rotate credentials.** The TruPortal service account password was exposed in
    a chat transcript; the bench operator account on the panel should be deleted;
    the seeded test account passwords are still the obvious ones. Herm has the
