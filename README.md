@@ -172,11 +172,24 @@ Note also that no `ni_*` object is a setpoint — `ni_BypassValue` in particular
 units `no-units` (95), so it is neither a temperature nor, as documented above, a
 duration. The occupant path is these `Cfg_` offsets, not a network input.
 
-**The clamp ships effectively disabled.** `Cfg_Thermostat_TempOffSpLimit` is
-`30` delta-degrees F out of the box, which lets somebody at the wall ask for 38
-or 106. It is writable, so narrowing it to 3 or 4 is the actual control over
-unreasonable local adjustment — and the only one, since the adjustment never
-crosses the network. It is polled and settable here as `occupant_adjust_limit`.
+**The clamp is usually wide open, but check rather than assume.** Probing all 16
+units at this building found fifteen at `Cfg_Thermostat_TempOffSpLimit = 30`
+delta-degrees F — wide enough to let somebody at the wall ask for 38 or 106 — and
+**one at 3**. So it is not reliably a factory default across a fleet: a unit may
+arrive configured, or have been narrowed by whoever installed it. Read it per
+device before reasoning about what an occupant can do.
+
+It is writable, so narrowing it is the actual control over unreasonable local
+adjustment — and the only one, since the adjustment never crosses the network.
+Polled and settable here as `occupant_adjust_limit`.
+
+**A change is recorded, not just displayed.** The cache is in memory and
+point-in-time, so a nudge that is cleared before anyone looks would leave no
+trace. The poller writes an audit row when `setpoint_status` moves into or out of
+`Temporary`, and when the offset changes while it stays there, carrying the
+offsets and the effective setpoint with it. Transitions only — thirty-five values
+every thirty seconds is a time-series problem wanting its own table, whereas the
+question actually asked is who has been adjusting the heating.
 
 A suite whose setpoint has been nudged shows a `temporary sp` chip on the
 dashboard, because otherwise it silently departs from its schedule with nothing

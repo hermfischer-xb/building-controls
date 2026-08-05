@@ -53,18 +53,26 @@ import time
 from .bacnet import BACNET_FAULTS, BacnetClient, DeviceUnreachable
 from .cache import Cache
 from .config import Config
+from .points import SetpointStatus
 from .zones import Zones
 
 log = logging.getLogger(__name__)
 
+# Offsets are floats read off the wire, so compare with a tolerance. Equality
+# would log a change every poll on a device reporting 2.0000001.
+_OFFSET_EPSILON = 0.05
+_OFFSET_KEYS = ("heat_adjust", "cool_adjust", "adjust")
+
 
 class Poller:
     def __init__(self, cfg: Config, client: BacnetClient, cache: Cache,
-                 zones: Zones) -> None:
+                 zones: Zones, store=None) -> None:
         self._cfg = cfg
         self._client = client
         self._cache = cache
         self._zones = zones
+        # Optional so the test harnesses can build a Poller without a database.
+        self._store = store
         self._task: asyncio.Task | None = None
         self._cycle = 0
         self._overruns = 0
@@ -180,6 +188,61 @@ class Poller:
             return
         await asyncio.gather(*(self._poll_device(d) for d in self._cfg.devices))
 
+    def _note_setpoint_change(self, device, previous: dict, current: dict) -> None:
+        """Record an occupant's temporary setpoint adjustment in the audit log.
+
+        The cache is in memory and point-in-time: it shows that a suite is
+        nudged right now, and loses the fact entirely when the occupant clears it
+        or the schedule rolls over. Nothing else in the system would ever know it
+        happened.
+
+        Transitions only, not a sample every cycle. Thirty-five values every
+        thirty seconds is a time-series problem and wants a table of its own;
+        what a manager actually asks is "who has been fiddling with the heating",
+        and that is answered by the handful of moments the answer changes.
+        """
+        if self._store is None:
+            return
+
+        def status(values: dict):
+            try:
+                return SetpointStatus(int(values["setpoint_status"]))
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        was, now = status(previous), status(current)
+        if now is None:
+            return
+
+        offsets = {k: current.get(k) for k in _OFFSET_KEYS}
+        moved = any(
+            abs(float(current.get(k) or 0.0) - float(previous.get(k) or 0.0)) > _OFFSET_EPSILON
+            for k in _OFFSET_KEYS
+        )
+
+        detail = {
+            **{k: v for k, v in offsets.items() if v is not None},
+            "effective_sp": current.get("effective_sp"),
+            "space_temp": current.get("space_temp"),
+        }
+
+        if not previous:
+            # First reading after a restart. Only worth a line if the suite is
+            # already adjusted, so the fact survives the process that found it.
+            if now is SetpointStatus.TEMPORARY:
+                self._store.log("occupant", "setpoint.temporary.observed",
+                                device.name, detail)
+            return
+
+        if was is not now:
+            action = ("setpoint.temporary" if now is SetpointStatus.TEMPORARY
+                      else "setpoint.scheduled")
+            self._store.log("occupant", action, device.name,
+                            {**detail, "from": was.name if was else None, "to": now.name})
+        elif moved and now is SetpointStatus.TEMPORARY:
+            # Adjusted again without passing through a scheduled state.
+            self._store.log("occupant", "setpoint.temporary.changed", device.name, detail)
+
     async def _poll_device(self, device) -> None:
         try:
             # Timed by the client, inside its gate, so a device queued behind
@@ -195,7 +258,12 @@ class Poller:
             # afterwards always yields 0.
             state = self._cache.get(device.device_id)
             missed = state.consecutive_failures if state else 0
+            # Snapshot before record_success overwrites it. The cache is the only
+            # place the previous reading exists, and comparing the two is what
+            # turns a point-in-time value into an event worth recording.
+            previous = dict(state.values) if state else {}
             self._cache.record_success(device.device_id, values, elapsed_ms)
+            self._note_setpoint_change(device, previous, values)
             if missed:
                 # Recovery is worth a line at info: it distinguishes a unit
                 # that flickers from one that is genuinely down, which is the

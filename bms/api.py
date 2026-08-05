@@ -136,7 +136,7 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
     store = Store(db_path)
     # Zones reads the store, so both must exist before anything that resolves one.
     zones = Zones(cfg.devices, store)
-    poller = Poller(cfg, client, cache, zones)
+    poller = Poller(cfg, client, cache, zones, store)
     reconciler = Reconciler(cfg, client, store, zones)
 
     @asynccontextmanager
