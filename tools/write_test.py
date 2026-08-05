@@ -6,7 +6,17 @@ schedule properties should not be written over BACnet. Both claims decide how
 holidays get implemented, so test them rather than trust them.
 
 Every test records the current value, writes, reads back, reverts, and re-reads to
-confirm the revert landed. Run against a bench unit.
+confirm the revert landed.
+
+**This writes to a real thermostat.** It was written against a unit on a bench and
+is safe there. Pointed at an occupied suite it will move that suite's setpoints,
+start a bypass and command its occupancy for the seconds each test takes, and a
+revert that fails leaves it that way. Pick a vacant suite, or run it out of
+hours, and read the summary at the end rather than assuming it cleaned up.
+
+Two kinds of point, and they are reverted differently -- see
+`commandable_roundtrip` for why writing the old value back to a commandable
+object is not a revert at all.
 
     .venv/bin/python tools/write_test.py --address 192.168.1.10/24 --target 192.168.1.101
 """
@@ -80,6 +90,50 @@ async def roundtrip(app, addr, objid, prop, test_value, label, compare=None):
         record(label, "WRITABLE", f"{original!r} -> {readback!r} -> {reverted!r}")
 
 
+async def commandable_roundtrip(app, addr, objid, prop, test_value, label,
+                                priority=8, compare=None):
+    """Command a point that HAS a priority array, then relinquish it.
+
+    Not the same operation as `roundtrip`, and using that one here would do
+    quiet damage. A commandable object resolves its present value from the
+    highest-priority non-null slot, so writing the *old value* back leaves our
+    slot occupied: the object reads correctly today and ignores the device's own
+    updates from then on. Releasing means writing Null at the same priority.
+
+    The relinquish is in a finally block for that reason -- an exception between
+    the write and the release would otherwise leave a thermostat pinned.
+    """
+    try:
+        before = await read(app, addr, objid, prop)
+    except Exception as err:  # noqa: BLE001
+        record(label, "UNREADABLE", str(err))
+        return
+
+    err = await try_write(app, addr, objid, prop, test_value, priority=priority)
+    if err:
+        record(label, "REJECTED", f"at priority {priority}: {err}")
+        return
+
+    try:
+        readback = await read(app, addr, objid, prop)
+        matched = compare(readback, test_value) if compare else (readback == test_value)
+    finally:
+        release_err = await try_write(app, addr, objid, prop, Null(), priority=priority)
+
+    after = None if release_err else await read(app, addr, objid, prop)
+
+    if release_err:
+        record(label, "COMMANDED — NOT RELEASED",
+               f"could not write Null at priority {priority}: {release_err}. "
+               f"The point is still commanded; relinquish it by hand.")
+    elif not matched:
+        record(label, "ACCEPTED*",
+               f"wrote {test_value!r} @P{priority}, read back {readback!r}, released -> {after!r}")
+    else:
+        record(label, "COMMANDABLE",
+               f"{before!r} -> {readback!r} @P{priority} -> released -> {after!r}")
+
+
 async def main() -> None:
     parser = SimpleArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True, help="thermostat IP")
@@ -114,6 +168,17 @@ async def main() -> None:
             back = await read(app, addr, "analog-value,4", "presentValue")
             await try_write(app, addr, "analog-value,4", "presentValue", 76.0)
             record("write AV4 @ priority 8", "ACCEPTED", f"read back {back!r} (priority likely ignored)")
+
+        print("\n=== 4b. no_EffSp: is the effective setpoint commandable? ===")
+        # analog-output,5 has a real priority array, with the device publishing
+        # its own value at priority 15. If a write at 8 takes, the gateway could
+        # offer a temporary setpoint over the network -- which the thermostat
+        # otherwise only allows at its own slider. If the device fights it, that
+        # shows up as a readback that does not match.
+        await commandable_roundtrip(
+            app, addr, "analog-output,5", "presentValue", 72.0, "no_EffSp @ priority 8",
+            compare=lambda a, b: abs(float(a) - float(b)) < 0.01,
+        )
 
         print("\n=== 5. calendar dateList -- the holiday question ===")
         # Christmas plus a two-day range, the shape a real holiday list needs.
