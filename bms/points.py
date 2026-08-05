@@ -25,6 +25,26 @@ class ScheduleState(IntEnum):
     STANDBY = 3
 
 
+class SetpointStatus(IntEnum):
+    """Which setpoint the thermostat is currently working to.
+
+    Read from `no_SetpointSts`, whose own stateText on firmware 01.01.16.00 is
+    ["Occ", "UnOcc", "Temporary", "StandBy"] -- BACnet multi-state values are
+    1-based, so these are the device's own labels rather than an interpretation.
+
+    TEMPORARY is the interesting one: it means somebody has adjusted the setpoint
+    at the thermostat itself, using the slider on its home screen, and that
+    adjustment stands until the next scheduled change or the override times out.
+    It is the only way to tell a suite running to its schedule from one somebody
+    has quietly nudged.
+    """
+
+    OCCUPIED = 1
+    UNOCCUPIED = 2
+    TEMPORARY = 3
+    STANDBY = 4
+
+
 class TempMode(IntEnum):
     """no_EffTempMode -- which mode the thermostat is in.
 
@@ -69,6 +89,15 @@ POINTS: tuple[Point, ...] = (
     Point("effective_sp", "analog-output,5", False, "degF", None, "Effective setpoint"),
     Point("effective_heat_sp", "analog-output,3", False, "degF", None, "Effective heating setpoint"),
     Point("effective_cool_sp", "analog-output,4", False, "degF", None, "Effective cooling setpoint"),
+    Point(
+        "setpoint_status",
+        "multi-state-output,7",
+        False,
+        None,
+        SetpointStatus,
+        "no_SetpointSts -- Occ/UnOcc/Temporary/StandBy. TEMPORARY means someone "
+        "moved the slider on the thermostat itself",
+    ),
     Point(
         "effective_occupancy",
         "multi-state-output,20",
@@ -139,6 +168,15 @@ POINTS: tuple[Point, ...] = (
     Point(
         "network_override_enable", "binary-value,135", True, None, None,
         "Cfg_Thermostat_Override -- gates whether ni_OccManCom is honoured",
+    ),
+    #   The clamp on the thermostat's own slider. Ships at 30 deltaF, which is no
+    #   limit in practice -- it lets an occupant standing at the wall ask for 38
+    #   or 106. Narrowing this is the only way to bound what someone can do
+    #   locally, because the adjustment is made on the device and there is no
+    #   network point to intercept it.
+    Point(
+        "occupant_adjust_limit", "analog-value,102", True, "deltaF", None,
+        "Cfg_Thermostat_TempOffSpLimit -- how far the slider may move the setpoint",
     ),
     # Read-back of what the device is actually doing with the bypass, as opposed
     # to what we last asked for. The remaining-time countdown is what a tenant

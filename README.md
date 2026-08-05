@@ -137,6 +137,37 @@ Anyone following the guide would have built the far worse workaround.
 `tools/write_test.py` reproduces all of this: it records each value, writes,
 reads back, reverts, and verifies the revert.
 
+### The occupant's own setpoint adjustment
+
+The thermostat's home screen has a slider that temporarily moves the setpoint,
+separate from the operational setpoints a manager sets. Three points describe it,
+all confirmed present on firmware `01.01.16.00`:
+
+| Point | Object | What it is |
+|---|---|---|
+| `no_SetpointSts` | `multi-state-output,7` | `Occ` / `UnOcc` / **`Temporary`** / `StandBy`, the device's own labels. `Temporary` means the slider has been moved and stands until the next scheduled change or the override expires |
+| `no_EffSp` | `analog-output,5` | the resulting effective setpoint |
+| `Cfg_Thermostat_TempOffSpLimit` | `analog-value,102` | **how far the slider may move it** — units are delta-degrees F |
+
+Two things follow that are worth knowing before designing around this.
+
+**There is no network point for a temporary adjustment.** Every `ni_*` object was
+enumerated: none of them is a setpoint. `ni_BypassValue` is not one either — its
+units are `no-units` (95), not degrees, so it is neither a temperature nor, as
+already documented above, a duration. The slider is a local affordance, and the
+gateway can observe it but not drive it. What the gateway *can* offer a tenant is
+bypass, which brings the space to occupied setpoints for a bounded period.
+
+**The clamp ships effectively disabled.** `Cfg_Thermostat_TempOffSpLimit` is
+`30` delta-degrees F out of the box, which lets somebody at the wall ask for 38
+or 106. It is writable, so narrowing it to 3 or 4 is the actual control over
+unreasonable local adjustment — and the only one, since the adjustment never
+crosses the network. It is polled and settable here as `occupant_adjust_limit`.
+
+A suite whose setpoint has been nudged shows a `temporary sp` chip on the
+dashboard, because otherwise it silently departs from its schedule with nothing
+to see.
+
 ---
 
 ## Requirements

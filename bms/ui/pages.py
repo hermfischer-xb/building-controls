@@ -14,7 +14,7 @@ from typing import Any
 from ..holidays import describe, occurrences
 from ..passkeys import VERIFICATION_WINDOW_SECONDS
 from ..points import (
-    SETPOINT_LIMITS, OccupancyState, ScheduleState, TempMode,
+    SETPOINT_LIMITS, OccupancyState, ScheduleState, SetpointStatus, TempMode,
     is_valid as is_valid_reading,
 )
 from ..schedules import DAYS, week_summary
@@ -147,6 +147,16 @@ def dashboard(user, devices: list[dict], reconcile: dict | None,
     rows = []
     for d in devices:
         v = d.get("values", {})
+        # Somebody moved the slider at the thermostat. Worth showing a manager,
+        # since it silently overrides the schedule until the next change and is
+        # otherwise invisible from here.
+        temporary = ""
+        try:
+            if int(v.get("setpoint_status")) == SetpointStatus.TEMPORARY:
+                temporary = chip("temporary sp", "warn")
+        except (TypeError, ValueError):
+            pass
+
         bypass = ""
         if v.get("bypass_active") and isinstance(v.get("bypass_remaining_minutes"), (int, float)):
             mins = int(v["bypass_remaining_minutes"])
@@ -156,7 +166,7 @@ def dashboard(user, devices: list[dict], reconcile: dict | None,
             f"""<tr>
  <td><a href="{detail.format(id=d['device_id'])}">{e(d['name'])}</a>
      <div class="sub">{e(d['zone'])} · {e(d['address'])}</div></td>
- <td>{_status_chip(d)} {bypass}</td>
+ <td>{_status_chip(d)} {bypass} {temporary}</td>
  <td class="num big" style="font-size:1.25rem">{num(v.get('space_temp'), '°')}</td>
  <td class="num">{num(v.get('effective_heat_sp'), '', 0)} / {num(v.get('effective_cool_sp'), '', 0)}</td>
  <td>{activity(v)}</td>
