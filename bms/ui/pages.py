@@ -215,8 +215,9 @@ def dashboard(user, devices: list[dict], reconcile: dict | None,
 
     body = f"""
 <h1>Dashboard</h1>
-<p class="lede">{online} of {len(devices)} device(s) responding.</p>
 {access}
+<div id="live">
+<p class="lede">{online} of {len(devices)} device(s) responding.</p>
 {outdoor_card}
 {banner}
 <div class="card"><div class="wrap"><table>
@@ -226,15 +227,41 @@ def dashboard(user, devices: list[dict], reconcile: dict | None,
  {''.join(rows)}
 </table></div></div>
 {drift_note}
+</div>
 <script>
-// The devices come from a poll cache, so refreshing the page is the honest way
-// to show new values; a partial DOM update would imply more liveness than exists.
-// It waits on any door or light action: reloading while the browser is showing a
-// Face ID sheet would cancel the unlock the person is standing there waiting for.
-setTimeout(function tick() {{
-  if (window.__busy) {{ setTimeout(tick, 4000); return; }}
-  location.reload();
-}}, 15000);
+// The values come from a poll cache, so the page has to re-ask periodically.
+// It used to call location.reload(), which repaints the whole document -- on a
+// laptop that reads as a visible flicker every fifteen seconds, and it throws
+// away scroll position and any text being selected.
+//
+// So: fetch the same page the server would have rendered anyway and swap only
+// the #live subtree. The server still renders every row, so there is no second
+// copy of the display logic to keep in step -- the honesty of a server render
+// with none of the repaint. The access card sits OUTSIDE #live deliberately: its
+// buttons carry click handlers, and replacing them would quietly unbind the
+// doors.
+async function refresh() {{
+  // Never mid-action: swapping the DOM under a Face ID prompt cancels the unlock
+  // the person is standing at the door waiting for.
+  if (window.__busy) return;
+  try {{
+    const res = await fetch(location.href, {{cache: 'no-store'}});
+    // Session expired -- the fetch followed a redirect to the login form. A real
+    // navigation is right here, otherwise the page sits showing stale data
+    // forever with no sign anything is wrong.
+    if (res.redirected && new URL(res.url).pathname !== new URL(location.href).pathname) {{
+      location.reload(); return;
+    }}
+    if (!res.ok) return;
+    const next = new DOMParser()
+      .parseFromString(await res.text(), 'text/html')
+      .getElementById('live');
+    if (next) document.getElementById('live').replaceWith(next);
+  }} catch (err) {{
+    // A dropped request is not worth a message; the next tick tries again.
+  }}
+}}
+setInterval(refresh, 15000);
 </script>
 """
     return page("Dashboard", user, body, active="/")
