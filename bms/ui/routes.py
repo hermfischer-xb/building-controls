@@ -55,10 +55,19 @@ def build_router(
         return RedirectResponse(f"/login?next={request.url.path}", status_code=303)
 
     def visible_devices(user) -> list[dict]:
+        # Sorted here rather than left in cache order, which is the order the
+        # devices happen to appear in devices.yaml. That file is where the
+        # building's wiring is recorded; someone appending a new thermostat
+        # should not have to think about where it lands on a screen, and someone
+        # wanting the screen reordered should not have to edit it.
+        #
+        # Zone first, then device id: floor 2 above floor 3, and 205 before 231
+        # numerically. Sorting on the name would work only while every suite is
+        # a three-digit number -- "Suite 1002" would file between 100 and 101.
         stale_after = cfg.poll_interval_seconds * 3
         return [
             d.to_dict(stale_after)
-            for d in cache.all()
+            for d in sorted(cache.all(), key=lambda d: (d.zone, d.device_id))
             if user.may_access_zone(d.zone)
         ]
 
