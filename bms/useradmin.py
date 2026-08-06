@@ -105,15 +105,26 @@ def read_rows(path: Path) -> list[dict[str, str]]:
 
 
 def known_zones(config_path: str) -> set[str] | None:
-    """Zones that some device actually sits in, for warning about typos.
+    """Zones this building uses, for warning about typos.
 
-    A tenant whose zone matches no device signs in successfully and sees an empty
+    A tenant whose zones match nothing signs in successfully and sees an empty
     page, which reads as a broken system rather than a bad spreadsheet cell. Best
     effort: a missing or unreadable config just means no warning.
+
+    Doors and lighting triggers count, not only thermostats. Since each suite
+    became its own zone, a floor holds no device at all while remaining what the
+    corridor lighting matches on, and a tenant is normally granted both -- their
+    suite for the thermostat and their floor for the lights. Warning on the floor
+    would flag the correct spreadsheet as the broken one.
     """
     try:
         from .config import load
-        return {d.zone for d in load(config_path).devices}
+        cfg = load(config_path)
+        return {
+            *(d.zone for d in cfg.devices),
+            *(t.zone for t in cfg.truportal.lighting_triggers if t.zone != "*"),
+            *(z for d in cfg.truportal.doors for z in d.zones if z != "*"),
+        }
     except Exception:  # noqa: BLE001 - never block an import on an unrelated config error
         return None
 

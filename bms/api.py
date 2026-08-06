@@ -136,7 +136,17 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
                   offline_after=cfg.offline_after_failures)
     store = Store(db_path)
     # Zones reads the store, so both must exist before anything that resolves one.
-    zones = Zones(cfg.devices, store)
+    # Doors and lighting triggers name zones too, and those zones are real
+    # whether or not a thermostat happens to sit in one. Passed in so a floor
+    # that only switches corridor lights can still be granted to a tenant.
+    zones = Zones(
+        cfg.devices,
+        store,
+        extra_zones=[
+            *(t.zone for t in cfg.truportal.lighting_triggers),
+            *(z for d in cfg.truportal.doors for z in d.zones),
+        ],
+    )
     poller = Poller(cfg, client, cache, zones, store)
     reconciler = Reconciler(cfg, client, store, zones)
 
