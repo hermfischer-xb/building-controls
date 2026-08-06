@@ -167,6 +167,20 @@ class Config(BaseModel):
     # bursting. Watch avg_poll_ms in the Link quality table after changing it: if
     # it rises, the network is contending and the number is too high.
     poll_concurrency: int = Field(default=1, ge=1, le=32)
+
+    # How often a poll is also written to the `reading` history table, and how
+    # long those samples are kept.
+    #
+    # Deliberately much slower than the poll interval. Polling every 30 s exists
+    # so a dead unit is noticed quickly; a room does not change temperature
+    # meaningfully in half a minute, and a suite takes tens of minutes to respond
+    # to a setpoint change. Five-minute samples describe the thermal behaviour
+    # just as well as thirty-second ones, at a twelfth of the rows.
+    #
+    # 0 disables recording entirely, which is the setting for anyone who does not
+    # want a per-suite occupancy record sitting on disk for three months.
+    history_interval_seconds: float = Field(default=300.0, ge=0.0)
+    history_retention_days: float = Field(default=90.0, ge=0.0)
     api_host: str = Field(
         default="127.0.0.1",
         description="bind address. Never 0.0.0.0 on a host with a public interface.",

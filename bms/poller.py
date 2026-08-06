@@ -76,6 +76,11 @@ class Poller:
         self._task: asyncio.Task | None = None
         self._cycle = 0
         self._overruns = 0
+        # Sampled history. Both start at 0 so the first cycle after a restart
+        # writes a sample and prunes -- a process that is restarted more often
+        # than the retention window would otherwise never prune at all.
+        self._last_sample = 0.0
+        self._last_prune = 0.0
 
     async def start(self) -> None:
         for d in self._cfg.devices:
@@ -94,6 +99,14 @@ class Poller:
             "one at a time" if concurrency == 1 else f"up to {concurrency} at a time",
             self._cfg.offline_after_failures,
         )
+        if self._store is None or self._cfg.history_interval_seconds <= 0:
+            log.info("history: not recording samples")
+        else:
+            log.info(
+                "history: sampling every %.0fs, keeping %.0f days",
+                self._cfg.history_interval_seconds,
+                self._cfg.history_retention_days,
+            )
 
         await self._verify_inventory()
         self._task = asyncio.create_task(self._run(), name="poller")
@@ -137,6 +150,10 @@ class Poller:
         while True:
             started = time.perf_counter()
             await self.poll_once()
+            # Inside the timed section on purpose. Writing history is work the
+            # cycle does, and hiding it would make a slow disk present as though
+            # the radios had got worse.
+            self._record_history()
             elapsed = time.perf_counter() - started
             self._cycle += 1
 
@@ -260,6 +277,57 @@ class Poller:
         elif moved and now is SetpointStatus.TEMPORARY:
             # Adjusted again without passing through a scheduled state.
             self._store.log("occupant", "setpoint.temporary.changed", device.name, detail)
+
+    def _record_history(self) -> None:
+        """Write one sample per device to the history table, on its own interval.
+
+        Read from the cache once per cycle rather than from inside `_poll_device`.
+        Three reasons, all of which bit something else in this file first:
+
+        * `_poll_device` runs concurrently now. Writing there would interleave
+          SQLite calls from several tasks on one connection.
+        * Every device in a sample then shares a single timestamp, so "every
+          suite at 14:05" is an equality rather than a range over a moving target.
+        * A device that failed this cycle is simply absent from the sample. Its
+          last good values are still in the cache and would otherwise be written
+          again under a new timestamp, inventing a reading that never happened.
+        """
+        if self._store is None or self._cfg.history_interval_seconds <= 0:
+            return
+        now = time.time()
+        if now - self._last_sample < self._cfg.history_interval_seconds:
+            return
+        self._last_sample = now
+
+        rows = [
+            (state.device_id, state.values)
+            for state in self._cache.all()
+            # `online` requires a successful poll on record, so this skips both a
+            # device that has never answered and one that is currently dark.
+            if state.online and state.values
+        ]
+        try:
+            written = self._store.record_readings(now, rows)
+        except Exception:  # noqa: BLE001 -- history must never stop the poll loop
+            log.exception("could not write sampled history")
+            return
+
+        if self._cycle and written < len(self._cfg.devices):
+            log.debug("history: sampled %d of %d device(s)",
+                      written, len(self._cfg.devices))
+
+        # Pruning is a daily job, not a per-cycle one: it is a full table scan
+        # against an index, and running it every five minutes to delete nothing
+        # is pure cost.
+        if now - self._last_prune >= 86400:
+            self._last_prune = now
+            try:
+                dropped = self._store.prune_readings(self._cfg.history_retention_days)
+                if dropped:
+                    log.info("history: pruned %d sample(s) older than %.0f days",
+                             dropped, self._cfg.history_retention_days)
+            except Exception:  # noqa: BLE001
+                log.exception("could not prune sampled history")
 
     async def _poll_device(self, device) -> None:
         try:

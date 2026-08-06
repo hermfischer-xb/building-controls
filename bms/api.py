@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -577,6 +578,15 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
             # bucket or gets its own -- and a test cannot tell a safe default
             # from a broken throttle without knowing it.
             "behind_proxy": cfg.behind_proxy,
+            # Same reasoning as poll_concurrency: a history that silently stopped
+            # recording looks exactly like one that was never switched on, and
+            # the difference only becomes visible when somebody needs the data
+            # and it is not there. `newest` going stale is the signal.
+            "history": {
+                "interval_seconds": cfg.history_interval_seconds,
+                "retention_days": cfg.history_retention_days,
+                **store.reading_span(),
+            },
         }
 
     @app.get("/points")
@@ -607,6 +617,25 @@ def create_app(cfg: Config, db_path: str = "data/bms.db") -> FastAPI:
         if state is None:
             raise HTTPException(404, f"no device {device_id}")
         return state.to_dict(cfg.poll_interval_seconds * 3)
+
+    @app.get("/devices/{device_id}/history")
+    async def device_history(device_id: int, hours: float = 24.0,
+                             user: User = Depends(current_user)) -> dict[str, Any]:
+        """Sampled history for one suite.
+
+        Gated by `require_device` like every other per-device route. This is a
+        record of when a suite was occupied, when someone was standing at the
+        thermostat, and how warm they keep it -- more revealing about the tenant
+        than the live reading it comes from, so it gets the same zone check and
+        not a weaker one.
+        """
+        require_device(device_id, user)
+        since = time.time() - max(0.0, hours) * 3600
+        return {
+            "device_id": device_id,
+            "hours": hours,
+            "samples": store.readings(device_id=device_id, since=since),
+        }
 
     @app.post("/devices/{device_id}/points/{key}")
     async def write_point(device_id: int, key: str, body: WriteRequest,

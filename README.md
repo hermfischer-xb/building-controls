@@ -195,6 +195,71 @@ A suite whose setpoint has been nudged shows a `temporary sp` chip on the
 dashboard, because otherwise it silently departs from its schedule with nothing
 to see.
 
+### Sampled history — the `reading` table
+
+The audit log records the moments somebody changed something. That is the wrong
+shape for a question like *"is this suite warm because the neighbour turned the
+cooling down?"*, whose answer lives in the temperature **between** the events.
+
+On 2026-08-05 Suite 321 held a `+3` °F cooling offset for nine hours. The only
+readings of neighbouring 326 in that whole window were its two scheduled
+rollovers — and two points cannot show a relationship. Hence a second table with
+a different shape:
+
+| | audit | reading |
+|---|---|---|
+| written when | something changes | every `history_interval_seconds` |
+| answers | who did what, when | what the building was doing |
+| retention | kept | `history_retention_days`, pruned daily |
+
+```yaml
+history_interval_seconds: 300   # 0 disables recording entirely
+history_retention_days: 90
+```
+
+Sampling is deliberately much slower than polling. Polling every 30 s exists so a
+dead unit is noticed quickly; a room does not change temperature meaningfully in
+half a minute, and a suite takes tens of minutes to respond to a setpoint change.
+Five-minute samples describe the thermal behaviour just as well at a twelfth of
+the rows — roughly 4,600 a day for 16 devices.
+
+Three properties are load-bearing, and `tools/test_history.py` pins all three:
+
+* **A device that failed its poll is absent from the sample**, not carried
+  forward. Its last good values are still in the cache and rewriting them under a
+  fresh timestamp would invent a reading that never happened.
+* **A point missing from a poll records as `NULL`, never `0.0`.** A zero offset
+  and an unread offset mean opposite things.
+* **Every device in a sample shares one timestamp**, taken once per cycle, so
+  comparing two suites is an equality rather than a search over a moving target.
+
+`/health` reports what the history actually holds, on the same reasoning as
+`poll_concurrency`: a recorder that silently stopped looks exactly like one that
+was never switched on, and the difference only surfaces when somebody needs the
+data and it is not there.
+
+To ask the question this was built for:
+
+```
+.venv/bin/python tools/correlate.py 321 326 --days 3
+```
+
+It reads the data two ways — a lagged correlation of A's setpoint against B's
+temperature, and an event study of what B did in the hours after each time A was
+adjusted. It also correlates the two *temperatures* as a control, because two
+suites on the same floor share weather and occupancy hours whatever the ductwork
+does; a setpoint correlation no stronger than the ambient one is not evidence of
+shared plant.
+
+**Know what a suite's sensor actually measures before reading its history.** A
+TC500A can average several remote sensors, and the resulting number is not "the
+temperature of a room". At this building Suite 221 averages sensors across
+adjacent rooms including a conference room holding fridges and a freezer, and
+sits on the south-east face with the building's heaviest sun exposure. It reads
+several degrees above every other suite as a matter of course. That is a property
+of the sensing, not a fault, and not something the fleet average should be
+compared against.
+
 ---
 
 ## Requirements

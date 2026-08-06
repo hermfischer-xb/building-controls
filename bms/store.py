@@ -212,6 +212,45 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit (ts DESC);
+
+-- Sampled history, as opposed to the audit log's transitions.
+--
+-- The audit table answers "who changed something, and when". It cannot answer
+-- "was 326 warm because 321 turned the cooling down", because that question
+-- needs the temperature between the events, not at them. On 2026-08-05 Suite 321
+-- held a +3F cooling offset for nine hours; the only readings of neighbouring
+-- 326 in that whole window were its two scheduled rollovers, and two points
+-- cannot show a relationship.
+--
+-- Wide rather than entity/attribute/value. The column set is small, fixed, and
+-- entirely numeric; EAV would triple the row count and turn every comparison
+-- between two suites into a self-join. Nullable throughout, because a point
+-- missing from a poll must record as "not read" rather than as zero -- a zero
+-- offset and an unread offset mean opposite things here.
+CREATE TABLE IF NOT EXISTS reading (
+    ts              REAL    NOT NULL,
+    device_id       INTEGER NOT NULL,
+    space_temp      REAL,
+    effective_sp    REAL,
+    heat_sp         REAL,
+    cool_sp         REAL,
+    -- SetpointStatus: 1=Occ 2=UnOcc 3=Temporary 4=StandBy. Denormalised
+    -- deliberately, so a query for "when was this suite adjusted" needs only
+    -- this table.
+    setpoint_status INTEGER,
+    heat_adjust     REAL,
+    cool_adjust     REAL,
+    heat_stages     REAL,
+    cool_stages     REAL,
+    fan_running     INTEGER,
+    oa_temp         REAL,
+    PRIMARY KEY (device_id, ts)
+) WITHOUT ROWID;
+
+-- (device_id, ts) is the primary key, which serves "one suite over a window".
+-- This second index serves "every suite at this moment", which is what the
+-- correlation between two units actually scans.
+CREATE INDEX IF NOT EXISTS idx_reading_ts ON reading (ts);
 """
 
 
@@ -327,6 +366,117 @@ class Store:
             d["detail"] = json.loads(d["detail"]) if d["detail"] else None
             out.append(d)
         return out
+
+    # --- sampled history --------------------------------------------------------
+    #
+    # Written by the poller on its own interval, which is deliberately slower than
+    # the poll interval: 30 s polling exists so a dead unit is noticed quickly,
+    # not because a room's temperature changes meaningfully in half a minute. A
+    # suite takes tens of minutes to respond to a setpoint change, so five-minute
+    # samples describe the thermal behaviour just as well at a twelfth the rows.
+
+    READING_COLUMNS = (
+        "space_temp", "effective_sp", "heat_sp", "cool_sp", "setpoint_status",
+        "heat_adjust", "cool_adjust", "heat_stages", "cool_stages", "fan_running",
+        "oa_temp",
+    )
+
+    # Point key -> column, for the ones whose names differ. The rest match.
+    READING_FROM_POINT = {
+        "heat_sp": "effective_heat_sp",
+        "cool_sp": "effective_cool_sp",
+        "heat_stages": "active_heat_stages",
+        "cool_stages": "active_cool_stages",
+    }
+
+    @classmethod
+    def reading_row(cls, values: dict[str, Any]) -> dict[str, Any]:
+        """Pick the recorded columns out of a poll's values.
+
+        Anything absent stays None rather than becoming 0. A thermostat that did
+        not return its cooling offset has not told us the offset is zero, and a
+        history that cannot tell those apart is worse than no history.
+        """
+        row: dict[str, Any] = {}
+        for column in cls.READING_COLUMNS:
+            value = values.get(cls.READING_FROM_POINT.get(column, column))
+            if isinstance(value, bool):
+                value = int(value)
+            row[column] = value if isinstance(value, (int, float)) else None
+        return row
+
+    def record_readings(self, ts: float, rows: Iterable[tuple[int, dict[str, Any]]]) -> int:
+        """Write one sample per device, in a single transaction.
+
+        Every device in a sample shares one timestamp, taken by the caller. Using
+        each row's own arrival time would scatter a cycle across several seconds
+        and make "every suite at this moment" a range query over a moving target.
+
+        `INSERT OR REPLACE` because the primary key is (device_id, ts): a retry or
+        an overlapping cycle rewrites the sample rather than raising.
+        """
+        columns = ("ts", "device_id", *self.READING_COLUMNS)
+        payload = [
+            (ts, device_id, *(self.reading_row(values)[c] for c in self.READING_COLUMNS))
+            for device_id, values in rows
+        ]
+        if not payload:
+            return 0
+        self._conn.executemany(
+            f"INSERT OR REPLACE INTO reading ({', '.join(columns)})"
+            f" VALUES ({', '.join('?' for _ in columns)})",
+            payload,
+        )
+        self._conn.commit()
+        return len(payload)
+
+    def readings(self, device_id: int | None = None, since: float | None = None,
+                 until: float | None = None, limit: int = 20000) -> list[dict[str, Any]]:
+        """Samples in ascending time order, oldest first.
+
+        Ascending because every consumer of this -- a chart, a correlation, a
+        CSV -- wants time running forwards, unlike the audit log where the
+        interesting row is the most recent one.
+        """
+        where, params = [], []
+        if device_id is not None:
+            where.append("device_id = ?")
+            params.append(device_id)
+        if since is not None:
+            where.append("ts >= ?")
+            params.append(since)
+        if until is not None:
+            where.append("ts <= ?")
+            params.append(until)
+        clause = f" WHERE {' AND '.join(where)}" if where else ""
+        params.append(limit)
+        rows = self._conn.execute(
+            f"SELECT * FROM reading{clause} ORDER BY ts LIMIT ?", params
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def reading_span(self) -> dict[str, Any]:
+        """What the history actually covers, for /health and the UI."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS samples, MIN(ts) AS oldest, MAX(ts) AS newest,"
+            " COUNT(DISTINCT device_id) AS devices FROM reading"
+        ).fetchone()
+        return dict(row) if row else {}
+
+    def prune_readings(self, retention_days: float) -> int:
+        """Drop samples older than the retention window.
+
+        Unbounded growth is the failure mode of every history table. At 16 devices
+        and five-minute samples this is roughly 4,600 rows a day, so ninety days
+        is about 415,000 rows -- tens of megabytes, on a database that currently
+        holds a few hundred kilobytes of intent.
+        """
+        if retention_days <= 0:
+            return 0
+        cutoff = time.time() - retention_days * 86400
+        cur = self._conn.execute("DELETE FROM reading WHERE ts < ?", (cutoff,))
+        self._conn.commit()
+        return cur.rowcount or 0
 
     # --- holidays ---------------------------------------------------------------
 
