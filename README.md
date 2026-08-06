@@ -799,8 +799,9 @@ onto the control network.
 
 | Device | Status |
 |---|---|
-| Honeywell TC500A-N, firmware `01.01.16.00` | ✅ verified end to end |
-| Other TC500A variants (`-W`, MS/TP) | ❔ untested; MS/TP would need a different transport |
+| Honeywell TC500A-N, firmware `01.01.16.00` | ✅ 16 units, verified end to end |
+| Interlogix TruPortal (doors, outputs, action triggers) | ✅ verified end to end — door unlock, relock and lighting triggers exercised physically, not inferred from a 200 |
+| Other TC500A variants (`-W`, MS/TP) | ❔ untested. MS/TP needs a different transport: `bacpypes3` 0.0.106 has no MS/TP link layer, so it would take a BACnet router and `address: "2:5"` rather than a code change |
 | Anything else | ❌ not supported yet |
 
 `tools/discover.py` will dump any BACnet device's object map, so it is a
