@@ -3,19 +3,29 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 
-On-premises building controls for a small commercial building. Today it manages
-**Honeywell TC500A** thermostats over **BACnet/IP**: polling them, holding the
-building's intended schedule in a database, reconciling that intent onto the
-devices, and serving a small web interface — including a phone-sized page a
-tenant can use to start the air conditioning before they arrive.
+On-premises building controls for a small commercial building, running the
+building it was written for.
 
-It is structured to grow into lighting and access control; see
-[Roadmap](#roadmap).
+**HVAC** is the core: **Honeywell TC500A** thermostats over **BACnet/IP**, polled
+into a cache, with the building's intended schedule held in a database and a
+reconciler pushing that intent onto the devices and detecting drift.
 
-Built and verified against real hardware: a **TC500A-N** on firmware
-`01.01.16.00`. Along the way it documents several places where the vendor's own
-integration guide is **wrong** — see
-[Corrections to the vendor documentation](#corrections-to-the-vendor-documentation).
+**Doors and hallway lighting** come from an **Interlogix TruPortal** panel over
+SOAP. A tenant can unlock an entrance from their phone, gated behind a passkey —
+Face ID or a fingerprint — because a session cookie proves somebody signed in
+weeks ago and a door deserves better than that.
+
+The web interface is server-rendered with small islands of vanilla JavaScript: no
+build step, no `node_modules`, nothing to bundle. It includes a phone-sized page
+a tenant uses to start the air conditioning before they arrive, open a door, and
+turn the corridor lights on.
+
+Built and verified against real hardware — **16 TC500A-N** thermostats on
+firmware `01.01.16.00`, and a TruPortal panel — not against a simulator. Along
+the way it documents several places where the vendor's own integration guide is
+**wrong**, see
+[Corrections to the vendor documentation](#corrections-to-the-vendor-documentation),
+and several where the hardware behaves in ways no document mentions.
 
 > [!WARNING]
 > **This controls HVAC equipment in an occupied building.** It is not
@@ -26,12 +36,16 @@ integration guide is **wrong** — see
 
 ## Project status
 
-**Early but working.** Every feature listed below has been exercised against a
-real thermostat, not just unit-tested. It currently runs against a single-device
-bench setup; it has not yet run a full building unattended for months.
+**Running a real building, and still early.** It manages 16 thermostats across
+two floors of an occupied commercial building, with tenants using it from their
+phones, doors that open, and nightly verified backups. Every feature has been
+exercised against real hardware rather than unit-tested in isolation.
 
-Interfaces should be considered unstable — the HTTP API and the database schema
-may change without a migration path until there is a tagged release.
+That is not the same as mature. It has not run unattended for months, the fleet
+is mid-commissioning, and the interfaces should be considered unstable — the HTTP
+API and the database schema may change without a migration path until there is a
+tagged release. Several findings here were made by breaking something in
+production and fixing it the same day; the commit history says which.
 
 ---
 
@@ -849,18 +863,32 @@ more access points.
 
 ## Roadmap
 
+Delivered since this list was written, though not the way it was planned:
+
+- [x] **Access control** — the building already had an Interlogix TruPortal
+      panel, so it was integrated over SOAP rather than replaced. Tenants unlock
+      doors from a phone behind a passkey assertion
+- [x] **Lighting** — as momentary triggers on that same panel, not the BACnet
+      relay module below
+
+Both arrived by integrating what was in the building rather than by buying the
+hardware originally specified, which is the cheaper answer and a worse fit for
+scheduling: TruPortal triggers are fire-and-forget, so lighting does **not**
+inherit the schedule groups, holiday calendars and reconciler that HVAC uses.
+That was the whole argument for a BACnet relay, and it survives.
+
 The near-term work is a **driver abstraction** — extracting the TC500A-specific
 code behind a device interface so the scheduling, holiday and reconciliation
-layers become device-agnostic. Everything below depends on it.
+layers become device-agnostic. Most of what is left depends on it.
 
 - [ ] `drivers/` split, with the scheduling layer dealing in occupancy states
       rather than BACnet objects
-- [ ] **Lighting**, via a BACnet/IP relay module. Choosing BACnet means lighting
-      inherits the existing poller, schedule groups, holiday calendars,
-      reconciler and roles almost for free
-- [ ] **Access control**, via Axis A1210/A1610 network door controllers over the
-      VAPIX HTTP API — chosen for a publicly documented API with no NDA or
-      partner fee
+- [ ] **Scheduled lighting**, via a BACnet/IP relay module, so lighting inherits
+      the poller, schedule groups, holiday calendars, reconciler and roles the
+      way HVAC already does
+- [ ] A **tenant temporary setpoint**, writing the thermostat's own occupant
+      offset points rather than its operational setpoints — pending confirmation
+      that they accept a network write at all
 - [ ] **Badge-driven comfort**: first badge-in on a weekend starts that suite's
       HVAC and lights; last badge-out plus a timeout releases them
 - [ ] Delayed-start pre-cooling ("be cool by 2pm" rather than "start now")
@@ -869,10 +897,14 @@ layers become device-agnostic. Everything below depends on it.
 - [ ] Per-holiday occupancy states on one device (the device has ten calendar
       objects; only one is currently used)
 
-Access control will integrate with a listed, purpose-built controller rather than
+Access control integrates with a listed, purpose-built controller rather than
 driving Wiegand and door relays directly. Door hardware on egress paths is
 life-safety territory with UL 294 and NFPA 101 implications, and the controller
-must keep working when this application is down.
+must keep working when this application is down — it does, and this application
+is only ever another client of it. If the TruPortal is ever replaced, the
+successor wants a publicly documented API with no NDA or partner fee; Axis
+A1210/A1610 over VAPIX was the candidate before the existing panel made the
+question moot.
 
 ## Contributing
 
