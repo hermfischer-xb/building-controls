@@ -24,6 +24,7 @@ from .config import Config, DeviceConfig
 from .holidays import to_calendar_entries
 from .points import BY_KEY, SETPOINT_LIMITS, ScheduleState, is_valid
 from .schedules import (
+    normalise_week,
     PRIORITY_HOLIDAY,
     bacnet_to_week,
     exception_to_bacnet,
@@ -334,7 +335,17 @@ class Reconciler:
             result.errors.append(f"read weekly schedule: {err}")
             return
 
-        if bacnet_to_week(current_raw) == {d: week[d] for d in range(1, 8)}:
+        # An empty day on the device does not mean a closed day -- it means
+        # Schedule_Default applies for the whole of it. Comparing without that
+        # read a device expressing "closed" as an empty Saturday as different
+        # from our explicit CLOSED_DAY, and rewrote it once for nothing. The
+        # cosmetic case is a unit defaulting to Unoccupied; the one that matters
+        # is a unit defaulting to Occupied, where an empty Saturday is open all
+        # day and treating it as closed would leave a suite conditioning all
+        # weekend with the reconciler reporting no drift.
+        schedule_default = await self._client.read_schedule_default(device, SCHEDULE_OBJID)
+        current = normalise_week(bacnet_to_week(current_raw), schedule_default)
+        if current == {d: week[d] for d in range(1, 8)}:
             result.already_correct.append("weekly schedule")
             return
 

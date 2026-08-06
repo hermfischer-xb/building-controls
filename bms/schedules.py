@@ -108,6 +108,30 @@ def week_to_bacnet(week: dict[int, list[dict]]) -> list[DailySchedule]:
     ]
 
 
+def normalise_week(week: dict[int, list[dict]], schedule_default: int | None) -> dict[int, list[dict]]:
+    """Give every empty day the meaning the device assigns it.
+
+    A day with no entries is not a closed day. BACnet says `Schedule_Default`
+    applies for the whole of it, so the same empty Saturday is closed on a unit
+    whose default is Unoccupied and open all day on one whose default is
+    Occupied.
+
+    This project writes closed days explicitly as `CLOSED_DAY`, so a device that
+    expresses the same thing by leaving the day empty compared as different and
+    was rewritten once for no reason. Harmless while every unit defaults to
+    Unoccupied -- and silently wrong the day one does not, because the reconciler
+    would read a fully occupied Saturday as closed and leave it alone.
+
+    `schedule_default` of None means it could not be read: the day is left empty
+    rather than guessed at, so a comparison fails safe towards writing the intent
+    rather than towards believing the device already matches.
+    """
+    if schedule_default is None:
+        return week
+    filled = [{"time": "00:00", "state": int(schedule_default)}]
+    return {day: (entries if entries else list(filled)) for day, entries in week.items()}
+
+
 def bacnet_to_week(weekly: Any) -> dict[int, list[dict]]:
     """Decode what a device currently holds, for drift comparison and display."""
     out: dict[int, list[dict]] = {}

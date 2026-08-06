@@ -390,6 +390,29 @@ class BacnetClient:
                     f"{device.name} ({device.address}): {_describe(err)}"
                 ) from err
 
+    async def read_schedule_default(self, device: DeviceConfig, objid: str) -> int | None:
+        """`Schedule_Default` -- what the device does on a day with no entries.
+
+        Needed to read a weekly schedule correctly at all. An empty daySchedule
+        does not mean "closed"; it means this value applies for the whole day, so
+        the same empty day is closed on a unit whose default is Unoccupied and
+        open all day on one whose default is Occupied.
+
+        None if it cannot be read, so a caller can decline to guess.
+        """
+        async with self._request(device.address):
+            try:
+                value = await asyncio.wait_for(
+                    self.app.read_property(Address(device.address), objid, "scheduleDefault"),
+                    timeout=self._timeout,
+                )
+            except BACNET_FAULTS:
+                return None
+        try:
+            return int(_unwrap(value))
+        except (TypeError, ValueError):
+            return None
+
     async def write_weekly_schedule(
         self, device: DeviceConfig, objid: str, week: list[Any]
     ) -> None:
