@@ -47,8 +47,59 @@ class Client:
     async def read_points_timed(s, d): return s.script.pop(0), 640.0
 
 def reading(status, heat=0.0, cool=0.0, sp=76.0, temp=74.0):
-    return {"setpoint_status": status, "heat_adjust": heat, "cool_adjust": cool,
-            "adjust": 0.0, "effective_sp": sp, "space_temp": temp}
+    v = {"heat_adjust": heat, "cool_adjust": cool,
+         "adjust": 0.0, "effective_sp": sp, "space_temp": temp}
+    # status=None models a poll that succeeded with this one object missing.
+    if status is not None:
+        v["setpoint_status"] = status
+    return v
+
+
+async def dropped_point_forges_nothing() -> int:
+    """A lost point must not read as an occupant standing at the thermostat.
+
+    `read_points_timed` does not fail a whole poll when one object comes back as
+    an error -- it warns and leaves the key out -- so a *successful* poll can
+    land without `setpoint_status`. The poll after that one then had nothing to
+    compare against, called it a transition, and wrote a row attributing it to
+    an occupant.
+
+    Nobody touches the thermostat anywhere in this sequence. The correct number
+    of audit rows is zero.
+    """
+    store = Store(pathlib.Path(tempfile.mkdtemp()) / "t.db")
+    cache = Cache(stale_after=90, offline_after=3)
+    client = Client()
+    p = Poller(Cfg(), client, cache, types.SimpleNamespace(of=lambda d: "floor-3"), store)
+    cache.register(314, "Suite 314", "floor-3", "10.0.0.14")
+
+    client.script = [
+        reading(2),      # baseline
+        reading(2),      # steady
+        reading(None),   # multi-state-output,7 errored; the rest of the poll is fine
+        reading(2),      # back, same value it has held throughout
+        reading(2),      # steady
+    ]
+    for _ in range(len(client.script)):
+        await p.poll_once()
+
+    rows = [r for r in store.recent_audit(20) if r["action"].startswith("setpoint")]
+    ok = not rows
+    print(f"  {'ok  ' if ok else 'FAIL'} a dropped point forges no occupant event"
+          + ("" if ok else f"   <- wrote {[r['action'] for r in rows]}"))
+
+    # The real transition still has to survive the guard: the point coming back
+    # must not swallow an adjustment that happens after it.
+    client.script = [reading(3, cool=-2.0)]
+    await p.poll_once()
+    rows = [r for r in store.recent_audit(20) if r["action"].startswith("setpoint")]
+    ok2 = [r["action"] for r in rows] == ["setpoint.temporary"]
+    print(f"  {'ok  ' if ok2 else 'FAIL'} and a genuine adjustment after it is still recorded"
+          + ("" if ok2 else f"   <- got {[r['action'] for r in rows]}"))
+
+    store.close()
+    return (not ok) + (not ok2)
+
 
 async def main():
     db = pathlib.Path(tempfile.mkdtemp()) / "t.db"
@@ -103,6 +154,10 @@ async def main():
     print(f"  {'ok  ' if ok else 'FAIL'} the offset is recorded with the event")
 
     store.close()
+
+    print("\n--- and what must NOT be written ---")
+    failures += await dropped_point_forges_nothing()
+
     print(f"\n{'ALL PASS' if not failures else f'{failures} FAILURE(S)'}")
     return 1 if failures else 0
 

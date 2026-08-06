@@ -234,11 +234,29 @@ class Poller:
                                 device.name, detail)
             return
 
+        if was is None:
+            # The previous poll succeeded but carried no status. That happens
+            # because read_points_timed does not fail a whole poll when one
+            # object errors -- it warns and omits the key -- so a poll can land
+            # with everything except this point.
+            #
+            # Without this, the next poll compares None against the unchanged
+            # status, calls that a transition, and writes a row saying an
+            # occupant did something. A dropped datagram would forge an entry in
+            # the record of who has been touching the thermostats, and it now
+            # also decides what the history table is asked to explain. Wait for
+            # two comparable readings instead; the real transition, if there is
+            # one, is still there on the next cycle.
+            return
+
         if was is not now:
             action = ("setpoint.temporary" if now is SetpointStatus.TEMPORARY
                       else "setpoint.scheduled")
+            # `was` cannot be None here -- the guard above returned. Written
+            # plainly so a null `from` in the database means something is wrong
+            # rather than being a shape the code still expects to produce.
             self._store.log("occupant", action, device.name,
-                            {**detail, "from": was.name if was else None, "to": now.name})
+                            {**detail, "from": was.name, "to": now.name})
         elif moved and now is SetpointStatus.TEMPORARY:
             # Adjusted again without passing through a scheduled state.
             self._store.log("occupant", "setpoint.temporary.changed", device.name, detail)
